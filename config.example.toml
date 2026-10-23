@@ -1,0 +1,68 @@
+# Configuration MediaDeck : copiée vers ~/.config/mediadeck/config.toml par `make config`.
+# Ce fichier contient le jeton d'accès : il doit rester en mode 600.
+
+[server]
+# 0.0.0.0 = toutes les interfaces ; préférer l'IP LAN du PC si possible
+host = "0.0.0.0"
+port = 8765
+# Adresse affichée dans l'URL et le QR code (`make url`) ; à renseigner si la détection
+# automatique choisit une mauvaise interface (VPN, Docker…). Nom d'hôte ou IPv4.
+# advertise_host = "192.168.1.104"
+# HTTPS : `make cert` crée une CA locale + un certificat et renseigne ces trois lignes.
+# La tablette doit installer la CA une fois (https://<ip>:<port>/ca.crt).
+# tls_cert = "~/.config/mediadeck/tls/server.pem"
+# tls_key = "~/.config/mediadeck/tls/server.key"
+# tls_ca = "~/.config/mediadeck/tls/mediadeck-ca.crt"
+# Généré par `make config` / `make token` (32 octets aléatoires, URL-safe)
+token = "CHANGE_ME"
+
+[audio]
+# Volume maximal autorisé depuis la tablette (1.0 = 100 %, jusqu'à 1.5)
+max_volume = 1.0
+
+[features]
+# Clavier/souris virtuels via /dev/uinput (nécessite `make uinput`)
+input = true
+# Veille / redémarrage / extinction via logind
+power = true
+# Saisie de texte depuis la tablette (clavier virtuel, `make uinput` requis). Désactivée par défaut : c'est un
+# clavier complet, donc un contrôle total du PC pour quiconque possède le jeton (ouvrir un terminal, taper...).
+text_input = false
+
+[admin]
+# Page /admin (bouton « Gérer » de l'onglet Lanceurs) et API REST des lanceurs
+enabled = true
+# Autorise la création/modification de commandes brutes depuis /admin. Une commande s'exécute avec vos
+# droits : tant que c'est false, /admin ne propose que des sites web et des applications installées.
+allow_custom_command = false
+
+# Lanceurs : IMPORTÉS UNE SEULE FOIS dans la base (~/.local/share/mediadeck/launchers.db) au premier
+# démarrage, puis gérés sur /admin ; cette section est ensuite ignorée et peut être supprimée.
+# Commande en liste argv, jamais interprétée par un shell.
+# Icônes disponibles : app, tv, film, globe, music, screen-off, speaker, lock, window
+
+# Plein écran sans verrou : F11 (bouton de la télécommande) en sort. `firefox --kiosk` est à éviter,
+# car le mode kiosque ignore F11.
+[[launchers]]
+id = "youtube"
+label = "YouTube TV"
+icon = "tv"
+command = ["chromium", "--start-fullscreen", "https://www.youtube.com/tv"]
+
+[[launchers]]
+id = "vlc"
+label = "VLC"
+icon = "film"
+command = ["vlc"]
+
+[[launchers]]
+id = "elisa"
+label = "Elisa"
+icon = "music"
+command = ["elisa"]
+
+[[launchers]]
+id = "screen-off"
+label = "Écran off"
+icon = "screen-off"
+command = ["kscreen-doctor", "--dpms", "off"]

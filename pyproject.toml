@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mediadeck"
+version = "0.1.0"
+description = "Web remote for a Linux media PC: MPRIS, PipeWire, virtual input, power"
+readme = "README-EN.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Denis" }]
+dependencies = [
+    "aiohttp>=3.9",
+    "dbus-next>=0.2.3",
+    "evdev>=1.6",
+]
+
+[project.optional-dependencies]
+dev = ["pyright>=1.1.380"]
+
+[project.scripts]
+mediadeck = "mediadeck.__main__:main"
+
+[tool.setuptools]
+packages = ["mediadeck"]
+
+[tool.setuptools.package-data]
+mediadeck = ["web/*.html", "web/static/*"]

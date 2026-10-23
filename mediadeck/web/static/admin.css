@@ -1,0 +1,99 @@
+/* MediaDeck : page d'administration des lanceurs (complète style.css) */
+
+html,
+body.admin {
+    height: auto;
+    min-height: 100%;
+    -webkit-user-select: text;
+    user-select: text;
+    overscroll-behavior: auto;
+}
+
+.admin-bar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: calc(12px + env(safe-area-inset-top)) 20px 12px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+}
+
+.admin-bar h1 {
+    margin: 0;
+    font-size: 18px;
+}
+
+.admin-main {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 16px 20px calc(32px + env(safe-area-inset-bottom));
+}
+
+.admin-list {
+    display: grid;
+    gap: 12px;
+    margin: 16px 0;
+    padding: 0;
+    list-style: none;
+}
+
+.admin-item {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 8px 16px;
+    align-items: center;
+    padding: 14px 16px;
+    border-radius: var(--radius);
+    background: var(--surface);
+    border: 1px solid var(--line);
+}
+
+.admin-item-text {
+    min-width: 0;
+}
+
+.admin-item-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+}
+
+.kind-tag {
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--surface-3);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.admin-item .sub {
+    margin: 4px 0 0;
+    overflow-wrap: anywhere;
+}
+
+.admin-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.chip.danger {
+    color: var(--danger);
+}
+
+@media (max-width: 520px) {
+    .admin-item {
+        grid-template-columns: 1fr;
+    }
+
+    .admin-actions {
+        justify-content: flex-start;
+    }
+}

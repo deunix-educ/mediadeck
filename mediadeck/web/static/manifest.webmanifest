@@ -1,0 +1,19 @@
+{
+    "name": "MediaDeck",
+    "short_name": "MediaDeck",
+    "description": "Web remote for a Linux media PC",
+    "start_url": "/",
+    "scope": "/",
+    "display": "fullscreen",
+    "orientation": "any",
+    "background_color": "#0e0f13",
+    "theme_color": "#0e0f13",
+    "icons": [
+        {
+            "src": "/static/icon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ]
+}

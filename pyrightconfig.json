@@ -1,0 +1,8 @@
+{
+    "include": ["mediadeck", "tests"],
+    "venvPath": ".",
+    "venv": ".venv",
+    "pythonVersion": "3.11",
+    "typeCheckingMode": "standard",
+    "reportMissingTypeStubs": false
+}

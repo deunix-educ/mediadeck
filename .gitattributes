@@ -1,0 +1,19 @@
+# Fins de ligne normalisées en LF
+* text=auto eol=lf
+
+*.py text diff=python
+*.js text
+*.css text diff=css
+*.html text diff=html
+*.toml text
+*.json text
+*.md text diff=markdown
+*.webmanifest text
+*.rules text
+*.in text
+Makefile text
+
+*.svg text
+*.png binary
+*.jpg binary
+*.ico binary

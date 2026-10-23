@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pyright/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Configuration locale : contient le jeton d'accès
+config.toml
+!config.example.toml
+*.local.toml
+
+# Secrets et données personnelles
+.env
+.env.*
+*.secret
+*secret*
+*password*
+*passwd*
+*credentials*
+*.token
+token.txt
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*.kdbx
+.netrc
+*.db
+*.sqlite
+*.sqlite3
+*.mbox
+*.eml
+contacts*.vcf
+
+# Éditeurs / OS
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Service généré par make service-install
+systemd/*.service
+!systemd/*.service.in

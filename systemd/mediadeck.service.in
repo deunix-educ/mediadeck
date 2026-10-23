@@ -1,0 +1,18 @@
+# Service utilisateur : doit tourner dans la session graphique (bus D-Bus de session)
+[Unit]
+Description=MediaDeck web remote for the media PC
+Documentation=file://@PROJECT_DIR@/README.md
+After=graphical-session.target pipewire-pulse.service
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@PROJECT_DIR@/.venv/bin/python -m mediadeck
+Restart=on-failure
+RestartSec=3
+# Durcissement compatible avec le pilotage de la session
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=graphical-session.target

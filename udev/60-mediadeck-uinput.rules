@@ -1,0 +1,4 @@
+# Donne accès à /dev/uinput à l'utilisateur de la session locale active (ACL logind).
+# Plus restrictif que l'ajout au groupe « input », qui permettrait de lire tous les claviers.
+# Le numéro doit rester < 73 pour être traité avant 73-seat-late.rules.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

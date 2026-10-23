@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0e0f13">
+    <title>MediaDeck – Lanceurs</title>
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/admin.css">
+    <script type="module" src="/static/admin.js"></script>
+</head>
+<body class="admin">
+    <header class="admin-bar">
+        <a class="chip" href="/" data-i18n="admin.back"></a>
+        <h1 data-i18n="admin.title"></h1>
+        <button class="chip" id="lang-toggle" type="button">EN</button>
+    </header>
+
+    <main class="admin-main">
+        <p class="sub" data-i18n="admin.help"></p>
+        <p class="banner" id="admin-error" role="alert" hidden></p>
+
+        <ul class="admin-list" id="admin-list"></ul>
+        <p class="sub" id="admin-empty" data-i18n="admin.empty" hidden></p>
+
+        <button class="primary" id="admin-add" type="button" data-i18n="admin.add"></button>
+    </main>
+
+    <dialog id="launcher-dialog" aria-labelledby="form-title">
+        <form id="launcher-form" novalidate>
+            <h2 id="form-title"></h2>
+
+            <label class="field">
+                <span data-i18n="form.label"></span>
+                <input id="form-label" type="text" maxlength="40" required autocomplete="off">
+            </label>
+
+            <div class="field-row">
+                <label class="field">
+                    <span data-i18n="form.icon"></span>
+                    <select id="form-icon"></select>
+                </label>
+                <label class="field">
+                    <span data-i18n="form.kind"></span>
+                    <select id="form-kind"></select>
+                </label>
+            </div>
+
+            <div data-group="web">
+                <label class="field">
+                    <span data-i18n="form.url"></span>
+                    <input id="form-url" type="url" inputmode="url" autocomplete="off" placeholder="https://">
+                </label>
+                <label class="field">
+                    <span data-i18n="form.browser"></span>
+                    <select id="form-browser"></select>
+                </label>
+                <label class="check">
+                    <input id="form-fullscreen" type="checkbox">
+                    <span data-i18n="form.fullscreen"></span>
+                </label>
+                <p class="sub" id="form-fullscreen-hint" data-i18n="form.fullscreen_unavailable" hidden></p>
+            </div>
+
+            <div data-group="app" hidden>
+                <label class="field">
+                    <span data-i18n="form.app"></span>
+                    <input id="form-app-filter" type="search" autocomplete="off" data-i18n-placeholder="form.app_filter">
+                </label>
+                <select id="form-app" size="8" aria-label="Applications"></select>
+                <p class="sub" id="form-apps-empty" data-i18n="form.apps_empty" hidden></p>
+            </div>
+
+            <div data-group="command" hidden>
+                <label class="field">
+                    <span data-i18n="form.command"></span>
+                    <textarea id="form-command" rows="5" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+                </label>
+                <p class="sub" id="form-command-hint" data-i18n="form.command_help"></p>
+            </div>
+
+            <p class="banner" id="form-error" role="alert" hidden></p>
+
+            <div class="form-actions">
+                <button class="chip" id="form-cancel" type="button" data-i18n="form.cancel"></button>
+                <button class="primary" type="submit" data-i18n="form.save"></button>
+            </div>
+        </form>
+    </dialog>
+
+    <div class="overlay" id="no-token" hidden>
+        <h1 data-i18n="token.title"></h1>
+        <p data-i18n="admin.token_help"></p>
+        <a class="chip" href="/" data-i18n="admin.back"></a>
+    </div>
+</body>
+</html>

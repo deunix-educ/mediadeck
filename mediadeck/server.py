@@ -1,0 +1,278 @@
+"""Serveur HTTP + WebSocket : diffuse l'état et relaie les commandes de la tablette."""
+
+from __future__ import annotations
+
+import asyncio
+import hmac
+import json
+import logging
+import mimetypes
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlparse
+
+from aiohttp import WSMsgType, web
+from dbus_next.aio.message_bus import MessageBus
+
+from . import __version__
+from .admin import AdminApi
+from .audio import AudioManager
+from .config import Config
+from .input import VirtualInput
+from .keymap import LayoutSpec, current_layout
+from .launchers import LauncherStore
+from .mpris import MprisManager
+from .system import SystemControl
+from .text import TextTyper
+
+log = logging.getLogger(__name__)
+
+WEB_DIR = Path(__file__).resolve().parent / "web"
+MAX_ART_BYTES = 10 * 1024 * 1024
+MAX_MESSAGE_BYTES = 4096
+STATE_REFRESH_SECONDS = 10.0
+
+CSP = (
+    "default-src 'self'; img-src 'self' https: http: data:; "
+    "connect-src 'self' ws: wss:; style-src 'self'; script-src 'self'; "
+    "base-uri 'none'; frame-ancestors 'none'"
+)
+
+
+class MediaDeckServer:
+    def __init__(self, config: Config) -> None:
+        self._config = config
+        self._clients: set[web.WebSocketResponse] = set()
+        self._broadcast_task: asyncio.Task[None] | None = None
+        self._background: list[asyncio.Task[None]] = []
+        self._bus: MessageBus | None = None
+        self.mpris: MprisManager | None = None
+        self.audio = AudioManager(config.max_volume, self.notify)
+        self.input = VirtualInput(config.enable_input)
+        self.text = TextTyper(self.input, config.enable_text_input, self._keyboard_layout)
+        self.system: SystemControl | None = None
+        self.launchers = LauncherStore()
+        imported = self.launchers.seed(config.launchers)
+        if imported:
+            log.info("imported %d launcher(s) from the config file; manage them on /admin", imported)
+        elif config.launchers:
+            log.info("[[launchers]] of the config file are ignored (already imported): manage them on /admin")
+
+    # ------------------------------------------------------------------
+    # Cycle de vie
+    # ------------------------------------------------------------------
+
+    async def on_startup(self, _app: web.Application) -> None:
+        try:
+            self._bus = await MessageBus().connect()
+            self.mpris = MprisManager(self._bus, self.notify)
+            await self.mpris.start()
+            self.system = SystemControl(
+                self._bus, self.launchers, self._config.enable_power, self._config.admin_enabled
+            )
+            await self.system.start()
+        except Exception as exc:  # noqa: BLE001 - lancé hors session graphique
+            log.error("D-Bus session bus unavailable, MPRIS and system control disabled: %s", exc)
+        await self.audio.start()
+        self._background.append(asyncio.create_task(self._periodic_state()))
+
+    async def on_shutdown(self, _app: web.Application) -> None:
+        for task in self._background:
+            task.cancel()
+        await self.audio.stop()
+        for client in list(self._clients):
+            await client.close(code=1001, message=b"server shutdown")
+        self.text.close()
+        self.input.close()
+        self.launchers.close()
+        if self._bus is not None:
+            self._bus.disconnect()
+
+    async def _keyboard_layout(self) -> LayoutSpec:
+        # Disposition active du PC, relue à chaque saisie (KDE peut basculer AZERTY/QWERTY)
+        return await current_layout(self._bus)
+
+    def build_app(self) -> web.Application:
+        app = web.Application(middlewares=[security_headers])
+        app.on_startup.append(self.on_startup)
+        app.on_shutdown.append(self.on_shutdown)
+        app.router.add_get("/", self.index)
+        app.router.add_get("/ws", self.websocket)
+        app.router.add_get("/art", self.art)
+        if self._config.admin_enabled:
+            app.router.add_get("/admin", self.admin_page)
+            AdminApi(self._config, self.launchers, self.notify).add_routes(app)
+        if self._config.tls_ca is not None:
+            app.router.add_get("/ca.crt", self.ca_certificate)
+        app.router.add_static("/static", WEB_DIR / "static", show_index=False, follow_symlinks=False)
+        return app
+
+    # ------------------------------------------------------------------
+    # Authentification
+    # ------------------------------------------------------------------
+
+    def _authorized(self, request: web.Request) -> bool:
+        token = request.query.get("token", "")
+        return hmac.compare_digest(token.encode(), self._config.token.encode())
+
+    # ------------------------------------------------------------------
+    # Routes HTTP
+    # ------------------------------------------------------------------
+
+    async def index(self, _request: web.Request) -> web.StreamResponse:
+        # La page elle-même est publique : le jeton protège /ws et /art
+        return web.FileResponse(WEB_DIR / "index.html")
+
+    async def admin_page(self, _request: web.Request) -> web.StreamResponse:
+        # Page publique comme l'index : l'API /api/* exige le jeton (en-tête Authorization)
+        return web.FileResponse(WEB_DIR / "admin.html")
+
+    async def ca_certificate(self, _request: web.Request) -> web.StreamResponse:
+        """Certificat public de la CA locale, à installer une fois sur la tablette."""
+        ca = self._config.tls_ca
+        if ca is None or not ca.is_file():
+            raise web.HTTPNotFound()
+        return web.FileResponse(
+            ca,
+            headers={
+                "Content-Type": "application/x-x509-ca-cert",
+                "Content-Disposition": 'attachment; filename="mediadeck-ca.crt"',
+            },
+        )
+
+    async def art(self, request: web.Request) -> web.StreamResponse:
+        """Sert la pochette locale (file://) du lecteur demandé, et rien d'autre."""
+        if not self._authorized(request):
+            raise web.HTTPUnauthorized()
+        if self.mpris is None:
+            raise web.HTTPNotFound()
+        try:
+            player = self.mpris.get(request.query.get("player", ""))
+        except ValueError as exc:
+            raise web.HTTPNotFound() from exc
+        url = player.art_url
+        if url is None or not url.startswith("file://"):
+            raise web.HTTPNotFound()
+        path = Path(unquote(urlparse(url).path))
+        mime, _ = mimetypes.guess_type(path.name)
+        # Seuls les fichiers image réguliers sont servis
+        if mime is None or not mime.startswith("image/") or not path.is_file():
+            raise web.HTTPNotFound()
+        if path.stat().st_size > MAX_ART_BYTES:
+            raise web.HTTPRequestEntityTooLarge(MAX_ART_BYTES, path.stat().st_size)
+        return web.FileResponse(path, headers={"Cache-Control": "private, max-age=3600"})
+
+    # ------------------------------------------------------------------
+    # WebSocket
+    # ------------------------------------------------------------------
+
+    async def websocket(self, request: web.Request) -> web.StreamResponse:
+        if not self._authorized(request):
+            raise web.HTTPUnauthorized()
+        ws = web.WebSocketResponse(heartbeat=20, max_msg_size=MAX_MESSAGE_BYTES)
+        await ws.prepare(request)
+        self._clients.add(ws)
+        log.info("client connected: %s (%d total)", request.remote, len(self._clients))
+        try:
+            await ws.send_json(await self.state())
+            async for message in ws:
+                if message.type == WSMsgType.TEXT:
+                    await self._handle(ws, message.data)
+                elif message.type == WSMsgType.ERROR:
+                    log.debug("websocket error: %s", ws.exception())
+        finally:
+            self._clients.discard(ws)
+            log.info("client disconnected: %s", request.remote)
+        return ws
+
+    async def _handle(self, ws: web.WebSocketResponse, raw: str) -> None:
+        try:
+            message = json.loads(raw)
+            if not isinstance(message, dict):
+                raise ValueError("message must be an object")
+            await self._dispatch(message)
+        except Exception as exc:  # noqa: BLE001 - toute erreur est renvoyée au client
+            log.debug("command failed: %s", exc)
+            await ws.send_json({"type": "error", "message": str(exc)})
+
+    async def _dispatch(self, message: dict[str, Any]) -> None:
+        domain = message.get("domain")
+        action = message.get("action")
+        if not isinstance(action, str):
+            raise ValueError("missing action")
+        match domain:
+            case "player":
+                if self.mpris is None:
+                    raise RuntimeError("MPRIS unavailable")
+                player_name = message.get("player")
+                if not isinstance(player_name, str):
+                    raise ValueError("missing player")
+                await self.mpris.get(player_name).execute(action, message.get("value"))
+            case "audio":
+                await self.audio.execute(action, message.get("sink"), message.get("value"))
+            case "input":
+                if action == "text":
+                    await self.text.type(message.get("text"))
+                else:
+                    self.input.execute(action, message)
+            case "system":
+                if self.system is None:
+                    raise RuntimeError("system control unavailable")
+                await self.system.execute(action, message)
+            case "ping":
+                return
+            case _:
+                raise ValueError(f"unknown domain '{domain}'")
+
+    # ------------------------------------------------------------------
+    # Diffusion de l'état
+    # ------------------------------------------------------------------
+
+    async def state(self) -> dict[str, Any]:
+        mpris_state: dict[str, Any] = {"players": [], "active": None, "available": False}
+        if self.mpris is not None:
+            mpris_state = {**await self.mpris.snapshot(), "available": True}
+        system_state = self.system.snapshot() if self.system else {"power": False, "admin": self._config.admin_enabled, "launchers": []}
+        return {
+            "type": "state",
+            "version": __version__,
+            "mpris": mpris_state,
+            "audio": self.audio.snapshot(),
+            "input": {**self.input.snapshot(), "text": self.text.snapshot()},
+            "system": system_state,
+        }
+
+    def notify(self) -> None:
+        """Planifie une diffusion groupée (anti-rebond 100 ms)."""
+        if not self._clients:
+            return
+        if self._broadcast_task is not None and not self._broadcast_task.done():
+            return
+        self._broadcast_task = asyncio.create_task(self._broadcast(delay=0.1))
+
+    async def _broadcast(self, delay: float = 0.0) -> None:
+        if delay:
+            await asyncio.sleep(delay)
+        if not self._clients:
+            return
+        payload = json.dumps(await self.state())
+        for client in list(self._clients):
+            try:
+                await client.send_str(payload)
+            except ConnectionResetError:
+                self._clients.discard(client)
+
+    async def _periodic_state(self) -> None:
+        # Recale régulièrement la position de lecture interpolée côté client
+        while True:
+            await asyncio.sleep(STATE_REFRESH_SECONDS)
+            await self._broadcast()
+
+
+@web.middleware
+async def security_headers(request: web.Request, handler: Any) -> web.StreamResponse:
+    response: web.StreamResponse = await handler(request)
+    response.headers.setdefault("Content-Security-Policy", CSP)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
