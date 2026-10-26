@@ -250,6 +250,9 @@ Notes :
 - La CA ne peut signer que des adresses privées (10/8, 172.16/12, 192.168/16, 127/8) et les noms `localhost`,
   `*.local`, `*.lan` et celui de la machine (`nameConstraints`). Sa clé `ca.key` reste sur le PC (mode 600) :
   ne pas la copier.
+- Le certificat n'est valable que pour l'**adresse annoncée** (`advertise_host`, celle du QR code), le nom de la machine
+  (`<nom>`, `<nom>.local`) et `localhost`. Un PC relié à la fois par câble et en Wi-Fi a deux adresses : utiliser celle
+  du QR code ; l'autre affiche « Votre connexion n'est pas privée » même avec la CA installée.
 - Le certificat serveur est valable 825 jours. `make cert` le réémet sans changer la CA : rien à refaire sur
   la tablette. Si l'adresse du PC change, corriger `advertise_host` puis relancer `make cert`.
 - Navigateur de la tablette : prendre un navigateur Chromium autonome (Chrome, Brave, Vivaldi, Vanadium…), qui fait

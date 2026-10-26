@@ -248,6 +248,9 @@ Notes:
 - The CA can only sign private addresses (10/8, 172.16/12, 192.168/16, 127/8) and the names `localhost`,
   `*.local`, `*.lan` and the machine's own name (`nameConstraints`). Its key `ca.key` stays on the PC (mode 600):
   never copy it.
+- The certificate is only valid for the **advertised address** (`advertise_host`, the one in the QR code), the machine
+  name (`<name>`, `<name>.local`) and `localhost`. A PC connected by both cable and Wi-Fi has two addresses: use the
+  one in the QR code; the other shows "Your connection is not private" even with the CA installed.
 - The server certificate is valid for 825 days. `make cert` reissues it without changing the CA, so nothing
   needs redoing on the tablet. If the PC's address changes, fix `advertise_host` and rerun `make cert`.
 - Tablet browser: use a standalone Chromium browser (Chrome, Brave, Vivaldi, Vanadium…), which trusts
