@@ -10,7 +10,7 @@ The PC runs a small Python bridge; the tablet only needs a browser.
 | Tab | Content | PC side |
 |---|---|---|
 | **Playing** | Cover art, title, progress, play/pause, next/previous, shuffle, repeat, player volume, player selection | MPRIS (session D-Bus): Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
-| **Sound** | Master volume, mute, output selection (HDMI, Bluetooth…) and per-output volume | `pactl` (PipeWire or PulseAudio) |
+| | **Volume bar** under the player: master volume, mute; the active output's button opens a window with the output selection (HDMI, Bluetooth…) and per-output volume; the bar is always visible | `pactl` (PipeWire or PulseAudio) |
 | **Touchpad** | Touchpad (click, right click, 2-finger scroll), D-pad, Esc, Space, F, F11…, text entry with the tablet's keyboard | `/dev/uinput`: works on X11 **and** Wayland |
 | **Launchers** | Configurable buttons: websites and installed applications (`/admin` page) | browser, `gio launch` |
 | **System** | Lock, sleep, restart, shut down (1 s long press): sensitive operations, kept apart from launchers | logind, `org.freedesktop.ScreenSaver` |

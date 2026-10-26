@@ -59,8 +59,8 @@
         </header>
 
         <main class="panels">
-            <!-- Lecture -->
-            <section class="panel" id="panel-player" data-panel="player">
+            <!-- Lecture : lecteur MPRIS, puis volume et sorties audio (PipeWire) sous le lecteur -->
+            <section class="panel panel-stack" id="panel-player" data-panel="player">
                 <div class="empty" id="player-empty">
                     <svg><use href="#i-music"/></svg>
                     <p data-i18n="player.none"></p>
@@ -115,31 +115,22 @@
                         </div>
                     </div>
                 </div>
-            </section>
 
-            <!-- Son -->
-            <section class="panel" id="panel-audio" data-panel="audio" hidden>
-                <div class="empty" id="audio-empty" hidden>
-                    <svg><use href="#i-speaker"/></svg>
-                    <p data-i18n="audio.none"></p>
-                </div>
                 <div class="audio-view" id="audio-view">
-                    <div class="master">
+                    <div class="volume-bar">
                         <button class="mute-btn" id="master-mute" type="button" data-i18n-label="audio.mute">
                             <svg><use id="master-mute-icon" href="#i-volume"/></svg>
                         </button>
-                        <div class="master-body">
-                            <div class="master-head">
-                                <span class="label" data-i18n="audio.master"></span>
-                                <span class="value" id="master-value">0 %</span>
-                            </div>
-                            <input type="range" id="master-volume" class="thick" min="0" max="100" value="0" data-i18n-label="audio.master">
-                            <span class="sub" id="master-name"></span>
-                        </div>
+                        <input type="range" id="master-volume" class="thick" min="0" max="100" value="0" data-i18n-label="audio.master">
+                        <span class="value" id="master-value">0 %</span>
+                        <button class="chip" id="outputs-toggle" type="button" aria-expanded="false" aria-controls="sink-list" data-i18n-label="audio.outputs">
+                            <svg><use href="#i-speaker"/></svg>
+                            <span class="output-name" id="master-name"></span>
+                        </button>
                     </div>
-                    <h2 class="section-title" data-i18n="audio.outputs"></h2>
-                    <ul class="sink-list" id="sink-list"></ul>
+                    <ul class="sink-list" id="sink-list" hidden></ul>
                 </div>
+                <p class="sub audio-none" id="audio-empty" data-i18n="audio.none" hidden></p>
             </section>
 
             <!-- Pavé tactile -->
@@ -212,7 +203,6 @@
 
         <nav class="tabbar" id="tabbar">
             <button class="tab active" type="button" data-tab="player"><svg><use href="#i-music"/></svg><span data-i18n="tab.player"></span></button>
-            <button class="tab" type="button" data-tab="audio"><svg><use href="#i-speaker"/></svg><span data-i18n="tab.audio"></span></button>
             <button class="tab" type="button" data-tab="remote"><svg><use href="#i-touch"/></svg><span data-i18n="tab.remote"></span></button>
             <button class="tab" type="button" data-tab="launchers"><svg><use href="#i-app"/></svg><span data-i18n="tab.launchers"></span></button>
             <button class="tab" type="button" data-tab="system"><svg><use href="#i-power"/></svg><span data-i18n="tab.system"></span></button>

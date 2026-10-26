@@ -385,8 +385,11 @@ input[type="range"]:disabled {
     display: grid;
     grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
     gap: 40px;
-    align-items: center;
+    /* « safe » : si le contenu dépasse, il reste atteignable par défilement au lieu d'être coupé en haut */
+    align-items: safe center;
     height: 100%;
+    /* Permet à la pochette de se dimensionner sur la hauteur disponible (unités cqh) */
+    container-type: size;
 }
 
 .cover {
@@ -394,8 +397,8 @@ input[type="range"]:disabled {
     display: grid;
     place-items: center;
     aspect-ratio: 1;
-    width: 100%;
-    max-height: calc(100dvh - 220px);
+    width: min(100%, calc(100dvh - 330px));
+    width: min(100%, 100cqh);
     justify-self: center;
     border-radius: var(--radius);
     background: var(--surface-2);
@@ -421,6 +424,8 @@ input[type="range"]:disabled {
     display: flex;
     flex-direction: column;
     min-width: 0;
+    /* Positionné comme la pochette : le texte reste au-dessus de l'ombre portée de celle-ci */
+    position: relative;
 }
 
 .player-tabs {
@@ -514,36 +519,82 @@ input[type="range"]:disabled {
 }
 
 /* ------------------------------------------------------------------ */
-/* Son                                                                 */
+/* Son : barre de volume sous le lecteur, sorties audio dépliables     */
 /* ------------------------------------------------------------------ */
 
+/* Panneau Lecture : le lecteur prend la place restante (et défile en interne s'il ne tient pas),
+   la barre de volume reste toujours visible en bas */
+.panel-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    overflow: hidden;
+}
+
+.panel-stack > .now-playing,
+.panel-stack > .empty {
+    flex: 1 1 0;
+    min-height: 0;
+    height: auto;
+    overflow-y: auto;
+}
+
+/* Au-dessus de tout : la pochette est positionnée et peindrait sinon par-dessus */
 .audio-view {
+    position: relative;
+    z-index: 2;
+    flex: none;
+    width: 100%;
     max-width: 820px;
     margin: 0 auto;
 }
 
-.master {
+.audio-none {
+    text-align: center;
+}
+
+.volume-bar {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 20px;
-    padding: 24px;
+    gap: 12px 16px;
+    padding: 10px 16px;
     border-radius: var(--radius);
     background: var(--surface);
+}
+
+.volume-bar input[type="range"] {
+    flex: 1 1 140px;
+    min-width: 0;
+}
+
+.volume-bar .value {
+    min-width: 64px;
+    text-align: right;
+    font-size: 22px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.output-name {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .mute-btn {
     display: grid;
     place-items: center;
-    width: 72px;
-    height: 72px;
+    width: 56px;
+    height: 56px;
     border-radius: 50%;
     background: var(--surface-2);
     flex: none;
 }
 
 .mute-btn svg {
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
 }
 
 .mute-btn.on {
@@ -551,34 +602,23 @@ input[type="range"]:disabled {
     color: var(--danger);
 }
 
-.master-body {
-    flex: 1;
-    min-width: 0;
-}
-
-.master-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-}
-
-.master-head .label {
-    font-weight: 600;
-    font-size: 18px;
-}
-
-.master-head .value {
-    font-size: 28px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-}
-
+/* Fenêtre flottante au-dessus de la barre : l'ouvrir ne déplace ni ne comprime le lecteur */
 .sink-list {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: calc(100% + 8px);
+    max-height: calc(100dvh - 290px);
+    overflow-y: auto;
     list-style: none;
     margin: 0;
-    padding: 0;
+    padding: 8px;
     display: grid;
     gap: 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--bg);
+    box-shadow: 0 12px 40px rgb(0 0 0 / 0.6);
 }
 
 .sink {
@@ -1047,11 +1087,86 @@ input[type="password"] {
         grid-template-columns: 1fr;
         gap: 0;
     }
+
+    /* Téléphone : le nom de la sortie active cède la place au curseur (le bouton garde son libellé accessible) */
+    .output-name {
+        display: none;
+    }
+
+    .volume-bar {
+        gap: 8px 12px;
+    }
+
+    .volume-bar .value {
+        min-width: 56px;
+        font-size: 20px;
+    }
 }
 
 /* ------------------------------------------------------------------ */
 /* Portrait / petits écrans                                            */
 /* ------------------------------------------------------------------ */
+
+@media (orientation: landscape) and (max-height: 700px) {
+    .play-btn {
+        width: 68px;
+        height: 68px;
+    }
+
+    .play-btn svg {
+        width: 32px;
+        height: 32px;
+    }
+
+    .progress {
+        margin-top: 14px;
+    }
+
+    .transport {
+        margin-top: 8px;
+    }
+
+    .player-extra {
+        margin-top: 12px;
+    }
+
+    .player-tabs {
+        margin-bottom: 12px;
+    }
+
+    .track-title {
+        font-size: clamp(22px, 3vw, 32px);
+    }
+}
+
+/* Très peu de hauteur (paysage de téléphone) : on garde l'essentiel, le reste reste atteignable par la tablette en paysage plus haut */
+@media (orientation: landscape) and (max-height: 560px) {
+    .topbar {
+        padding: 6px 20px;
+    }
+
+    .tab {
+        padding: 4px 0;
+    }
+
+    .panel {
+        padding-bottom: 12px;
+    }
+
+    .track-album,
+    .player-extra {
+        display: none;
+    }
+
+    .volume-bar {
+        padding: 6px 16px;
+    }
+
+    .mute-btn {
+        width: 48px;
+        height: 48px;
+    }
+}
 
 @media (orientation: portrait), (max-width: 760px) {
     .panel {
@@ -1066,7 +1181,7 @@ input[type="password"] {
     }
 
     .cover {
-        width: min(100%, 46dvh);
+        width: min(100%, 30dvh);
     }
 
     .remote-view {
@@ -1078,7 +1193,11 @@ input[type="password"] {
         grid-template-columns: repeat(2, 1fr);
     }
 
-    .master {
-        padding: 16px;
+    .now-playing {
+        container-type: normal;
+    }
+
+    .volume-bar {
+        padding: 10px 12px;
     }
 }

@@ -16,7 +16,6 @@ const MESSAGES = {
         "status.auth": "Jeton refusé ?",
         "action.fullscreen": "Plein écran",
         "tab.player": "Lecture",
-        "tab.audio": "Son",
         "tab.remote": "Pavé",
         "tab.launchers": "Lanceurs",
         "tab.system": "Système",
@@ -78,7 +77,6 @@ const MESSAGES = {
         "status.auth": "Token rejected?",
         "action.fullscreen": "Fullscreen",
         "tab.player": "Playing",
-        "tab.audio": "Sound",
         "tab.remote": "Touchpad",
         "tab.launchers": "Launchers",
         "tab.system": "System",
@@ -454,7 +452,7 @@ class PlayerPanel {
 }
 
 // ----------------------------------------------------------------------
-// Panneau son (PipeWire via pactl)
+// Volume et sorties audio (PipeWire via pactl), affichés sous le lecteur
 // ----------------------------------------------------------------------
 
 class AudioPanel {
@@ -473,13 +471,32 @@ class AudioPanel {
             volume: $("master-volume"),
             value: $("master-value"),
             name: $("master-name"),
+            toggle: $("outputs-toggle"),
             list: $("sink-list"),
         };
 
         this.els.mute.addEventListener("click", () => this.command("toggle_mute", this.defaultSink?.name));
+        // Les sorties (rarement changées) s'ouvrent en fenêtre flottante depuis le bouton de la sortie active
+        this.els.toggle.addEventListener("click", () => this.setOutputsOpen(this.els.list.hidden));
+        document.addEventListener("click", (event) => {
+            if (!event.target.closest("#audio-view")) {
+                this.setOutputsOpen(false);
+            }
+        });
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                this.setOutputsOpen(false);
+            }
+        });
         this.bindSlider(this.els.volume, () => this.defaultSink?.name, (value) => {
             this.els.value.textContent = `${value} %`;
         });
+    }
+
+    setOutputsOpen(open) {
+        this.els.list.hidden = !open;
+        this.els.toggle.setAttribute("aria-expanded", String(open));
+        this.els.toggle.classList.toggle("active", open);
     }
 
     get defaultSink() {
