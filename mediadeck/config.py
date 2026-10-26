@@ -58,6 +58,8 @@ class Config:
     enable_text_input: bool = False
     # Dossiers parcourus par l'onglet Médias ; None = dossiers Musique / Vidéos / Images de l'utilisateur, () = onglet désactivé
     media_roots: tuple[Path, ...] | None = None
+    # Miniatures et images d'illustration (ffmpeg) ; désactivables
+    media_thumbnails: bool = True
 
     @property
     def tls_enabled(self) -> bool:
@@ -88,6 +90,13 @@ def _parse_media_roots(media: dict[str, Any]) -> tuple[Path, ...] | None:
         if not root.is_absolute():
             raise ConfigError(f"media.roots: '{root}' must be an absolute path (or start with ~)")
     return tuple(dict.fromkeys(roots))
+
+
+def _parse_media_thumbnails(media: dict[str, Any]) -> bool:
+    thumbnails = media.get("thumbnails", True)
+    if not isinstance(thumbnails, bool):
+        raise ConfigError("media.thumbnails must be a boolean")
+    return thumbnails
 
 
 def _parse_launchers(raw: Any) -> tuple[Launcher, ...]:
@@ -198,6 +207,7 @@ def parse_config(data: dict[str, Any]) -> Config:
         allow_custom_command=allow_custom_command,
         enable_text_input=enable_text_input,
         media_roots=_parse_media_roots(media),
+        media_thumbnails=_parse_media_thumbnails(media),
     )
 
 

@@ -64,7 +64,16 @@
             <!-- Lecture : lecteur MPRIS, puis volume et sorties audio (PipeWire) sous le lecteur -->
             <section class="panel panel-stack" id="panel-player" data-panel="player">
                 <div class="empty" id="player-empty">
-                    <svg><use href="#i-music"/></svg>
+                    <svg id="player-none-icon"><use href="#i-music"/></svg>
+                    <!-- Dernier fichier ouvert depuis l'onglet Médias : titre et image, même sans lecteur MPRIS -->
+                    <div class="last-media" id="last-media" hidden>
+                        <p class="sub" data-i18n="player.last_opened"></p>
+                        <div class="last-art">
+                            <img id="last-img" alt="" hidden>
+                            <svg id="last-icon"><use id="last-icon-use" href="#i-film"/></svg>
+                        </div>
+                        <h2 id="last-title"></h2>
+                    </div>
                     <p data-i18n="player.none"></p>
                 </div>
                 <div class="now-playing" id="player-view" hidden>
@@ -78,31 +87,34 @@
                         <p class="track-artist" id="track-artist"></p>
                         <p class="track-album" id="track-album"></p>
 
-                        <div class="progress">
-                            <input type="range" id="seek" min="0" max="1000" value="0" step="1" data-i18n-label="player.seek">
-                            <div class="times">
-                                <span id="time-pos">0:00</span>
-                                <span id="time-len">0:00</span>
+                        <!-- Progression et commandes : restent visibles en bas de la zone du lecteur, quelle que soit la hauteur -->
+                        <div class="controls">
+                            <div class="progress">
+                                <input type="range" id="seek" min="0" max="1000" value="0" step="1" data-i18n-label="player.seek">
+                                <div class="times">
+                                    <span id="time-pos">0:00</span>
+                                    <span id="time-len">0:00</span>
+                                </div>
                             </div>
-                        </div>
 
-                        <div class="transport">
-                            <button class="icon-btn toggle" id="btn-shuffle" type="button" data-i18n-label="player.shuffle">
-                                <svg><use href="#i-shuffle"/></svg>
-                            </button>
-                            <button class="icon-btn big" id="btn-prev" type="button" data-i18n-label="player.previous">
-                                <svg><use href="#i-prev"/></svg>
-                            </button>
-                            <button class="play-btn" id="btn-play" type="button" data-i18n-label="player.play_pause">
-                                <svg><use id="play-icon" href="#i-play"/></svg>
-                            </button>
-                            <button class="icon-btn big" id="btn-next" type="button" data-i18n-label="player.next">
-                                <svg><use href="#i-next"/></svg>
-                            </button>
-                            <button class="icon-btn toggle" id="btn-loop" type="button" data-i18n-label="player.loop">
-                                <svg><use href="#i-loop"/></svg>
-                                <span class="badge" id="loop-badge" hidden>1</span>
-                            </button>
+                            <div class="transport">
+                                <button class="icon-btn toggle" id="btn-shuffle" type="button" data-i18n-label="player.shuffle">
+                                    <svg><use href="#i-shuffle"/></svg>
+                                </button>
+                                <button class="icon-btn big" id="btn-prev" type="button" data-i18n-label="player.previous">
+                                    <svg><use href="#i-prev"/></svg>
+                                </button>
+                                <button class="play-btn" id="btn-play" type="button" data-i18n-label="player.play_pause">
+                                    <svg><use id="play-icon" href="#i-play"/></svg>
+                                </button>
+                                <button class="icon-btn big" id="btn-next" type="button" data-i18n-label="player.next">
+                                    <svg><use href="#i-next"/></svg>
+                                </button>
+                                <button class="icon-btn toggle" id="btn-loop" type="button" data-i18n-label="player.loop">
+                                    <svg><use href="#i-loop"/></svg>
+                                    <span class="badge" id="loop-badge" hidden>1</span>
+                                </button>
+                            </div>
                         </div>
 
                         <div class="player-extra">
@@ -142,7 +154,10 @@
                     <nav class="crumbs" id="media-crumbs" data-i18n-label="media.path"></nav>
                     <button class="icon-btn" id="media-refresh" type="button" data-i18n-label="media.refresh"><svg><use href="#i-restart"/></svg></button>
                 </div>
-                <div class="media-filters" id="media-filters" role="group" data-i18n-label="media.filter"></div>
+                <div class="media-tools">
+                    <div class="media-filters" id="media-filters" role="group" data-i18n-label="media.filter"></div>
+                    <input class="media-search" id="media-search" type="search" autocomplete="off" enterkeyhint="search" data-i18n-placeholder="media.search" data-i18n-label="media.search_label">
+                </div>
                 <div class="media-grid" id="media-grid"></div>
                 <p class="sub media-status" id="media-status" role="status" hidden></p>
             </section>

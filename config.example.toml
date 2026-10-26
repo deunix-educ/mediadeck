@@ -47,6 +47,8 @@ allow_custom_command = false
 # Le jeton donne accès aux noms des fichiers de ces dossiers : n'y mettre que ce qui peut être vu depuis la tablette.
 # Le lecteur de chaque type (son, image, vidéo) se choisit sur la page /admin.
 # roots = ["~/Musique", "~/Vidéos", "~/Images"]
+# Miniatures d'images et image du fichier joué (ffmpeg, optionnel : sans lui, les icônes restent).
+# thumbnails = true
 
 # Lanceurs : IMPORTÉS UNE SEULE FOIS dans la base (~/.local/share/mediadeck/launchers.db) au premier
 # démarrage, puis gérés sur /admin ; cette section est ensuite ignorée et peut être supprimée.

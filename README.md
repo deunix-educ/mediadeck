@@ -9,9 +9,9 @@ Le PC exécute un petit pont Python ; la tablette n'a besoin que d'un navigateur
 
 | Onglet | Contenu | Côté PC |
 |---|---|---|
-| **Lecture** | Pochette, titre, progression, lecture/pause, suivant/précédent, aléatoire, répétition, volume du lecteur, choix du lecteur | MPRIS (D-Bus de session) : Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
+| **Lecture** | Pochette (ou, à défaut, image du fichier joué), titre (ou nom du fichier), progression, lecture/pause, suivant/précédent, aléatoire, répétition, volume du lecteur, choix du lecteur | MPRIS (D-Bus de session) : Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
 | | **Barre de volume** sous le lecteur : volume principal, sourdine ; le bouton de la sortie active ouvre une fenêtre avec le choix de la sortie (HDMI, Bluetooth…) et le volume par sortie ; la barre reste toujours visible | `pactl` (PipeWire ou PulseAudio) |
-| **Médias** | Fichiers son, image et vidéo des dossiers du PC, sous forme d'icônes ; un appui ouvre le fichier **sur le PC** avec le lecteur choisi pour son type | `gio` ; dossiers et lecteurs : voir « Médias » |
+| **Médias** | Fichiers son, image et vidéo des dossiers du PC, en icônes (miniatures pour les images) avec recherche ; un appui ouvre le fichier **sur le PC** avec le lecteur choisi pour son type | `gio` ; dossiers et lecteurs : voir « Médias » |
 | **Pavé** | Pavé tactile (clic, clic droit, défilement 2 doigts), croix directionnelle, Échap, Espace, F, F11…, saisie de texte avec le clavier de la tablette | `/dev/uinput` : fonctionne sous X11 **et** Wayland |
 | **Lanceurs** | Boutons configurables : sites web et applications installées (page `/admin`) | navigateur, `gio launch` |
 | **Système** | Verrouillage, veille, redémarrage, extinction (appui long 1 s) : opérations délicates, séparées des lanceurs | logind, `org.freedesktop.ScreenSaver` |
@@ -38,7 +38,7 @@ KDE Connect n'est pas nécessaire : il peut rester installé pour ses autres fon
 ## Installation (Debian / LMDE)
 
 ```bash
-make deps             # paquets système (sudo) : venv, gcc, pactl, qrencode
+make deps             # paquets système (sudo) : venv, gcc, pactl, qrencode, ffmpeg
 make install          # .venv + dépendances Python
 make config           # ~/.config/mediadeck/config.toml (mode 600) avec un jeton aléatoire
 make uinput           # règle udev « uaccess » pour /dev/uinput (sudo)
@@ -115,7 +115,7 @@ les lanceurs. Les changements apparaissent aussitôt sur la tablette.
 ## Médias
 
 L'onglet **Médias** (affiché dès qu'au moins un dossier est configuré) liste les fichiers **son**, **image** et
-**vidéo** sous forme d'icônes : sous-dossiers, fil d'Ariane, bouton retour, filtre Tout / Sons / Images / Vidéos.
+**vidéo** sous forme d'icônes : sous-dossiers, fil d'Ariane, bouton retour, filtre Tout / Sons / Images / Vidéos, recherche.
 Un appui sur un fichier l'**ouvre sur le PC** ; la tablette reste une télécommande.
 
 - **Dossiers** : `[media] roots` dans `config.toml` (chemins absolus ou `~/…`). Sans cette clé, ce sont les dossiers
@@ -133,10 +133,24 @@ Un appui sur un fichier l'**ouvre sur le PC** ; la tablette reste une télécomm
 - **Sécurité** : le client n'envoie jamais de chemin absolu, seulement un dossier racine et un chemin relatif. Le
   serveur refuse `..`, les chemins absolus, les entrées cachées (`.x`) et tout ce que les liens symboliques
   feraient sortir de la racine. Seules les extensions de médias connues sont listées et ouvertes (jamais un script,
-  même renommé en `.mp3` ou lié vers un `.sh`). L'API `GET /api/media` exige le jeton en en-tête `Authorization`.
+  même renommé en `.mp3` ou lié vers un `.sh`). L'API `GET /api/media` exige le jeton en en-tête `Authorization` ; les
+  miniatures (`/thumb`) l'ont dans l'URL, comme `/art`, car une balise image n'envoie pas d'en-tête. `ffmpeg` est lancé sans
+  entrée standard, limité aux fichiers locaux, avec un délai et trois processus au plus ; une image est lue par le seul
+  décodeur d'image (une liste de lecture déguisée en `.jpg` ne donne rien).
   Un dossier contient au plus 1000 entrées affichées. Le jeton donne accès aux **noms** des fichiers de ces dossiers :
   ne configurer que ce qui peut être vu depuis la tablette.
-- Pas de miniatures : une icône par type, comme dans l'onglet Lanceurs.
+- **Recherche** : le champ « Rechercher… » cherche dans les **noms** (sans tenir compte des accents ni de la casse, tous
+  les mots doivent y figurer) dans le dossier affiché et ses sous-dossiers, ou dans tous les dossiers depuis le
+  premier niveau. Les résultats indiquent leur dossier ; un appui ouvre le fichier ou le dossier. Au plus 300
+  résultats, 4 secondes ; les liens symboliques ne sont pas suivis.
+- **Miniatures** : les images (jpg, png, gif, webp, bmp, tiff ; pas HEIC ni AVIF) s'affichent en miniature, fabriquées par
+  `ffmpeg` (`apt install ffmpeg`, installé par `make deps`) et gardées dans `~/.cache/mediadeck/thumbs` (3000 fichiers
+  au plus). Sans ffmpeg, ou pour une image illisible, l'icône reste. `[media] thumbnails = false` les désactive.
+- **Titre et image dans l'onglet Lecture** : quand un lecteur joue un fichier d'un dossier configuré, l'onglet montre son
+  titre (le nom du fichier si le lecteur n'en donne pas) et une image : celle du lecteur, sinon une image du dossier
+  (`<nom>.jpg`, `<nom>-poster.jpg`, `poster.jpg`, `cover.jpg`, `folder.jpg`…), sinon la pochette intégrée d'un fichier
+  son ou une image prise dans la vidéo. Sans lecteur MPRIS (visionneuse d'images, lecteur muet), l'onglet montre le
+  **dernier fichier ouvert** depuis l'onglet Médias, avec son titre et son image.
 
 ## Saisie de texte
 

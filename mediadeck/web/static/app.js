@@ -22,6 +22,7 @@ const MESSAGES = {
         "tab.system": "Système",
         "player.none": "Aucun lecteur multimédia actif",
         "player.unknown": "Titre inconnu",
+        "player.last_opened": "Dernier fichier ouvert",
         "player.seek": "Position",
         "player.shuffle": "Aléatoire",
         "player.previous": "Précédent",
@@ -45,6 +46,12 @@ const MESSAGES = {
         "media.image": "Images",
         "media.video": "Vidéos",
         "media.loading": "Chargement…",
+        "media.search": "Rechercher…",
+        "media.search_label": "Rechercher un fichier ou un dossier",
+        "media.searching": "Recherche…",
+        "media.no_results": "Aucun résultat.",
+        "media.results_truncated": "Résultats tronqués : précisez la recherche.",
+        "media.search_for": "« {query} »",
         "media.empty": "Aucun fichier multimédia ici.",
         "media.none_match": "Aucun fichier de ce type ici.",
         "media.truncated": "Liste tronquée : seuls les premiers éléments sont affichés.",
@@ -100,6 +107,7 @@ const MESSAGES = {
         "tab.system": "System",
         "player.none": "No active media player",
         "player.unknown": "Unknown title",
+        "player.last_opened": "Last file opened",
         "player.seek": "Position",
         "player.shuffle": "Shuffle",
         "player.previous": "Previous",
@@ -123,6 +131,12 @@ const MESSAGES = {
         "media.image": "Images",
         "media.video": "Videos",
         "media.loading": "Loading…",
+        "media.search": "Search…",
+        "media.search_label": "Search for a file or a folder",
+        "media.searching": "Searching…",
+        "media.no_results": "No result.",
+        "media.results_truncated": "Results truncated: refine the search.",
+        "media.search_for": "“{query}”",
         "media.empty": "No media file here.",
         "media.none_match": "No file of this type here.",
         "media.truncated": "List truncated: only the first items are shown.",
@@ -170,6 +184,26 @@ const MESSAGES = {
 // ----------------------------------------------------------------------
 // Utilitaires
 // ----------------------------------------------------------------------
+
+// Les images servies par le serveur (/art : pochette d'un lecteur, /thumb : miniature) exigent le jeton dans l'URL,
+// car une balise <img> ne peut pas envoyer d'en-tête ; les autres adresses (http…) restent telles quelles.
+function authenticated(src, token) {
+    return src.startsWith("/art") || src.startsWith("/thumb") ? `${src}&token=${encodeURIComponent(token)}` : src;
+}
+
+// Titre d'un fichier : dernier élément de l'adresse, sans extension (« file:///a/Mon%20film.mkv » → « Mon film »)
+function titleFromUrl(url) {
+    if (typeof url !== "string" || url === "") {
+        return "";
+    }
+    let name = url.split(/[?#]/)[0].split("/").filter(Boolean).pop() ?? "";
+    try {
+        name = decodeURIComponent(name);
+    } catch {
+        // adresse mal encodée : on garde le texte tel quel
+    }
+    return name.replace(/\.[A-Za-z0-9]{1,5}$/, "");
+}
 
 class Throttle {
     // Limite la fréquence d'envoi tout en garantissant l'envoi de la dernière valeur
@@ -313,6 +347,7 @@ class PlayerPanel {
             raise: $("btn-raise"),
         };
 
+        this.last = null;
         this.volumeThrottle = new Throttle(80, (value) => this.command("set_volume", value));
         this.bindEvents();
         // Interpolation locale de la position entre deux états serveur
@@ -370,6 +405,39 @@ class PlayerPanel {
         });
     }
 
+    // Dernier fichier ouvert depuis l'onglet Médias : montré (titre + image) tant qu'aucun lecteur n'est actif
+    updateLast(last) {
+        this.last = last ?? null;
+        this.renderLast();
+    }
+
+    renderLast() {
+        const last = this.last;
+        $("last-media").hidden = !last;
+        // Élément SVG : pas de propriété « hidden » (réservée aux éléments HTML), donc l'attribut
+        $("player-none-icon").toggleAttribute("hidden", Boolean(last));
+        if (!last) {
+            return;
+        }
+        $("last-title").textContent = last.name;
+        $("last-icon-use").setAttribute("href", `#i-${MediaPanel.ICONS[last.type] ?? "music"}`);
+        const image = $("last-img");
+        const url = last.art ? authenticated(last.art, this.connection.token) : null;
+        if (url === null) {
+            image.hidden = true;
+            image.removeAttribute("src");
+        } else if (image.getAttribute("src") !== url) {
+            image.hidden = true;
+            image.onload = () => {
+                image.hidden = false;
+            };
+            image.onerror = () => {
+                image.hidden = true;
+            };
+            image.src = url;
+        }
+    }
+
     update(mpris) {
         this.players = mpris.players ?? [];
         this.receivedAt = performance.now();
@@ -401,7 +469,7 @@ class PlayerPanel {
         }
 
         const meta = player.metadata;
-        this.els.title.textContent = meta.title || this.i18n.t("player.unknown");
+        this.els.title.textContent = meta.title || titleFromUrl(meta.url) || this.i18n.t("player.unknown");
         this.els.artist.textContent = meta.artist || "";
         this.els.album.textContent = meta.album || "";
         this.renderCover(meta.art);
@@ -457,8 +525,8 @@ class PlayerPanel {
             img.removeAttribute("src");
             return;
         }
-        // Les pochettes locales passent par /art, protégé par le jeton
-        const url = src.startsWith("/art") ? `${src}&token=${encodeURIComponent(this.connection.token)}` : src;
+        // Les pochettes locales passent par /art et les images de la bibliothèque par /thumb, protégés par le jeton
+        const url = authenticated(src, this.connection.token);
         if (img.getAttribute("src") !== url) {
             img.hidden = true;
             img.onload = () => {
@@ -956,6 +1024,9 @@ class MediaPanel {
     // Type d'entrée -> icône du sprite ; « dir » = sous-dossier
     static ICONS = { dir: "folder", audio: "music", image: "image", video: "film" };
     static FILTERS = ["all", "audio", "image", "video"];
+    static SEARCH_DELAY_MS = 300;
+    static MIN_QUERY = 2;
+    static THUMB_SIZE = 160;
 
     constructor(connection, i18n, toast, tabs) {
         this.connection = connection;
@@ -965,24 +1036,31 @@ class MediaPanel {
         this.tab = document.querySelector('[data-tab="media"]');
         this.rootsKey = "";
         this.roots = [];
+        this.thumbnails = false;
         this.root = null; // dossier racine affiché ; null = liste des dossiers
         this.path = "";
         this.listing = null;
+        this.query = ""; // recherche en cours (résultats dans this.results)
+        this.results = null;
         this.status = "";
         this.filter = "all";
         this.loaded = false;
         this.loadId = 0;
+        this.searchId = 0;
+        this.searchTimer = null;
 
         this.els = {
             panel: $("panel-media"),
             up: $("media-up"),
             crumbs: $("media-crumbs"),
             filters: $("media-filters"),
+            search: $("media-search"),
             grid: $("media-grid"),
             status: $("media-status"),
         };
         this.els.up.addEventListener("click", () => this.up());
-        $("media-refresh").addEventListener("click", () => this.load());
+        $("media-refresh").addEventListener("click", () => (this.searching ? this.search() : this.load()));
+        this.els.search.addEventListener("input", () => this.onSearchInput());
         tabs.onSelect((name) => {
             if (name === "media") {
                 this.show();
@@ -995,19 +1073,26 @@ class MediaPanel {
         return !this.els.panel.hidden;
     }
 
+    get searching() {
+        return this.query !== "";
+    }
+
     update(system) {
-        const roots = system.media?.roots ?? [];
-        const key = JSON.stringify(roots);
+        const media = system.media ?? {};
+        const roots = media.roots ?? [];
+        const key = JSON.stringify([roots, media.thumbnails === true]);
         if (key === this.rootsKey) {
             return;
         }
         this.rootsKey = key;
         this.roots = roots;
+        this.thumbnails = media.thumbnails === true;
         // Sans dossier configuré, l'onglet disparaît ; avec un seul dossier, on l'ouvre directement
         this.tab.hidden = roots.length === 0;
         if (roots.length === 0 && this.visible) {
             this.tabs.select("player");
         }
+        this.clearSearch();
         this.root = roots.length === 1 ? roots[0].id : null;
         this.path = "";
         this.listing = null;
@@ -1024,9 +1109,25 @@ class MediaPanel {
         }
     }
 
+    async request(path, params) {
+        const response = await fetch(`${path}?${new URLSearchParams(params)}`, {
+            headers: { Authorization: `Bearer ${this.connection.token}` },
+            cache: "no-store",
+        });
+        const data = await response.json().catch(() => ({}));
+        if (response.status === 401) {
+            throw new Error(this.i18n.t("media.denied"));
+        }
+        if (!response.ok) {
+            throw new Error(this.i18n.t("media.error", { message: data.error ?? response.statusText }));
+        }
+        return data;
+    }
+
     // Charge le dossier courant (GET /api/media, jeton en en-tête)
     async load() {
         this.loaded = true;
+        this.clearSearch();
         if (this.root === null) {
             this.listing = null;
             this.status = "";
@@ -1039,21 +1140,9 @@ class MediaPanel {
         let listing = null;
         let status = "";
         try {
-            const query = new URLSearchParams({ root: this.root, path: this.path });
-            const response = await fetch(`/api/media?${query}`, {
-                headers: { Authorization: `Bearer ${this.connection.token}` },
-                cache: "no-store",
-            });
-            const data = await response.json().catch(() => ({}));
-            if (response.status === 401) {
-                status = this.i18n.t("media.denied");
-            } else if (!response.ok) {
-                status = this.i18n.t("media.error", { message: data.error ?? response.statusText });
-            } else {
-                listing = data;
-            }
-        } catch {
-            status = this.i18n.t("status.offline");
+            listing = await this.request("/api/media", { root: this.root, path: this.path });
+        } catch (error) {
+            status = error instanceof TypeError ? this.i18n.t("status.offline") : error.message;
         }
         if (id !== this.loadId) {
             return; // une navigation plus récente a pris le relais
@@ -1064,6 +1153,57 @@ class MediaPanel {
         this.els.panel.scrollTop = 0;
     }
 
+    // --- Recherche : dans le dossier affiché et ses sous-dossiers, ou dans tous les dossiers au premier niveau
+    onSearchInput() {
+        clearTimeout(this.searchTimer);
+        const text = this.els.search.value.trim();
+        if (text.length < MediaPanel.MIN_QUERY) {
+            if (text === "" && this.searching) {
+                this.clearSearch();
+                this.render();
+            }
+            return;
+        }
+        this.searchTimer = setTimeout(() => {
+            this.query = text;
+            this.search();
+        }, MediaPanel.SEARCH_DELAY_MS);
+    }
+
+    async search() {
+        const id = ++this.searchId;
+        this.results = null;
+        this.status = this.i18n.t("media.searching");
+        this.render();
+        const params = { q: this.query };
+        if (this.root !== null) {
+            params.root = this.root;
+            params.path = this.path;
+        }
+        let results = null;
+        let status = "";
+        try {
+            results = await this.request("/api/media/search", params);
+        } catch (error) {
+            status = error instanceof TypeError ? this.i18n.t("status.offline") : error.message;
+        }
+        if (id !== this.searchId || !this.searching) {
+            return; // recherche abandonnée ou remplacée
+        }
+        this.results = results;
+        this.status = status;
+        this.render();
+        this.els.panel.scrollTop = 0;
+    }
+
+    clearSearch() {
+        clearTimeout(this.searchTimer);
+        this.searchId++; // ignore une réponse encore en route
+        this.query = "";
+        this.results = null;
+        this.els.search.value = "";
+    }
+
     go(root, path) {
         this.root = root;
         this.path = path;
@@ -1071,6 +1211,11 @@ class MediaPanel {
     }
 
     up() {
+        if (this.searching) {
+            this.clearSearch();
+            this.render();
+            return;
+        }
         if (this.root === null) {
             return;
         }
@@ -1081,9 +1226,10 @@ class MediaPanel {
         }
     }
 
-    open(entry) {
-        const path = this.path === "" ? entry.name : `${this.path}/${entry.name}`;
-        this.connection.send({ domain: "system", action: "open_media", root: this.root, path });
+    // Ouvre un fichier sur le PC : root/path désignent le dossier de l'entrée (résultat de recherche ou dossier affiché)
+    open(root, folder, entry) {
+        const path = folder === "" ? entry.name : `${folder}/${entry.name}`;
+        this.connection.send({ domain: "system", action: "open_media", root, path });
         this.toast.show(this.i18n.t("media.opening", { name: entry.name }));
     }
 
@@ -1094,7 +1240,7 @@ class MediaPanel {
     }
 
     renderBar() {
-        const atTop = this.root === null || (this.path === "" && this.roots.length <= 1);
+        const atTop = !this.searching && (this.root === null || (this.path === "" && this.roots.length <= 1));
         this.els.up.disabled = atTop;
 
         const crumbs = [];
@@ -1113,21 +1259,25 @@ class MediaPanel {
             crumbs.push(crumb);
         };
         const segments = this.path === "" ? [] : this.path.split("/");
+        const inside = this.searching;
         if (this.roots.length > 1) {
-            add(this.i18n.t("media.home"), () => this.go(null, ""), this.root === null);
+            add(this.i18n.t("media.home"), () => this.go(null, ""), this.root === null && !inside);
         }
         if (this.root !== null) {
             const root = this.roots.find((candidate) => candidate.id === this.root);
-            add(root?.name ?? this.root, () => this.go(this.root, ""), segments.length === 0);
+            add(root?.name ?? this.root, () => this.go(this.root, ""), segments.length === 0 && !inside);
             segments.forEach((segment, index) => {
                 const target = segments.slice(0, index + 1).join("/");
-                add(segment, () => this.go(this.root, target), index === segments.length - 1);
+                add(segment, () => this.go(this.root, target), index === segments.length - 1 && !inside);
             });
+        }
+        if (inside) {
+            add(this.i18n.t("media.search_for", { query: this.query }), () => {}, true);
         }
         this.els.crumbs.replaceChildren(...crumbs);
         this.els.crumbs.scrollLeft = this.els.crumbs.scrollWidth;
 
-        this.els.filters.hidden = this.root === null;
+        this.els.filters.hidden = this.root === null && !inside;
         this.els.filters.replaceChildren(
             ...MediaPanel.FILTERS.map((name) => {
                 const chip = document.createElement("button");
@@ -1143,57 +1293,101 @@ class MediaPanel {
         );
     }
 
-    tile(kind, name, onClick) {
+    // Une tuile : icône (ou miniature pour une image), nom, et le dossier d'origine pour un résultat de recherche
+    tile(entry, root, folder, caption, onClick) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "media-tile";
-        button.dataset.kind = kind;
-        button.innerHTML = `<svg><use href="#i-${MediaPanel.ICONS[kind]}"/></svg>`;
+        button.dataset.kind = entry.kind;
+        const icon = () => {
+            const holder = document.createElement("span");
+            holder.innerHTML = `<svg><use href="#i-${MediaPanel.ICONS[entry.kind]}"/></svg>`;
+            return holder.firstElementChild;
+        };
+        if (entry.kind === "image" && this.thumbnails && root !== null) {
+            const path = folder === "" ? entry.name : `${folder}/${entry.name}`;
+            const src = `/thumb?${new URLSearchParams({ root, path, size: MediaPanel.THUMB_SIZE, v: entry.v ?? 0 })}`;
+            const image = document.createElement("img");
+            image.className = "thumb";
+            image.alt = "";
+            image.loading = "lazy";
+            image.decoding = "async";
+            image.addEventListener("error", () => {
+                // Miniature impossible (format non géré…) : retour à l'icône
+                button.classList.remove("has-thumb");
+                image.replaceWith(icon());
+            });
+            image.src = authenticated(src, this.connection.token);
+            button.classList.add("has-thumb");
+            button.append(image);
+        } else {
+            button.append(icon());
+        }
         const label = document.createElement("span");
-        label.textContent = name;
+        label.textContent = entry.name;
         button.append(label);
+        if (caption) {
+            const small = document.createElement("small");
+            small.textContent = caption;
+            button.append(small);
+        }
         button.addEventListener("click", () => onClick(button));
         return button;
     }
 
+    visibleEntries() {
+        const source = this.searching ? this.results?.entries : this.listing?.entries;
+        return (source ?? []).filter(
+            (entry) => entry.kind === "dir" || this.filter === "all" || entry.kind === this.filter,
+        );
+    }
+
     renderGrid() {
-        if (this.root === null) {
+        if (!this.searching && this.root === null) {
             this.els.grid.replaceChildren(
-                ...this.roots.map((root) => this.tile("dir", root.name, () => this.go(root.id, ""))),
+                ...this.roots.map((root) =>
+                    this.tile({ kind: "dir", name: root.name }, null, "", "", () => this.go(root.id, "")),
+                ),
             );
             return;
         }
-        const entries = (this.listing?.entries ?? []).filter(
-            (entry) => entry.kind === "dir" || this.filter === "all" || entry.kind === this.filter,
-        );
-        this.els.grid.replaceChildren(
-            ...entries.map((entry) =>
-                this.tile(entry.kind, entry.name, (button) => {
-                    if (entry.kind === "dir") {
-                        this.go(this.root, this.path === "" ? entry.name : `${this.path}/${entry.name}`);
-                        return;
-                    }
-                    this.open(entry);
-                    button.classList.add("opened");
-                    setTimeout(() => button.classList.remove("opened"), 1500);
-                }),
-            ),
-        );
+        const tiles = this.visibleEntries().map((entry) => {
+            // Dans une recherche chaque résultat porte son dossier racine et son dossier ; sinon c'est le dossier affiché
+            const root = this.searching ? entry.root : this.root;
+            const folder = this.searching ? entry.folder : this.path;
+            const caption = this.searching ? [this.roots.length > 1 ? this.rootName(root) : "", folder].filter(Boolean).join(" / ") : "";
+            return this.tile(entry, root, folder, caption, (button) => {
+                if (entry.kind === "dir") {
+                    this.clearSearch();
+                    this.go(root, folder === "" ? entry.name : `${folder}/${entry.name}`);
+                    return;
+                }
+                this.open(root, folder, entry);
+                button.classList.add("opened");
+                setTimeout(() => button.classList.remove("opened"), 1500);
+            });
+        });
+        this.els.grid.replaceChildren(...tiles);
+    }
+
+    rootName(id) {
+        return this.roots.find((root) => root.id === id)?.name ?? id;
     }
 
     renderStatus() {
         let message = this.status;
-        if (message === "" && this.root !== null && this.listing) {
-            const entries = this.listing.entries;
+        const source = this.searching ? this.results : this.listing;
+        if (message === "" && source) {
+            const entries = source.entries;
             const files = entries.filter((entry) => entry.kind !== "dir");
             const matching = files.filter((entry) => this.filter === "all" || entry.kind === this.filter);
             if (entries.length === 0) {
-                message = this.i18n.t("media.empty");
+                message = this.i18n.t(this.searching ? "media.no_results" : "media.empty");
             } else if (files.length > 0 && matching.length === 0) {
                 // Des fichiers existent mais le filtre les masque (sous-dossiers éventuellement visibles)
                 message = this.i18n.t("media.none_match");
-            } else if (this.listing.truncated) {
-                message = this.i18n.t("media.truncated");
+            } else if (source.truncated) {
+                message = this.i18n.t(this.searching ? "media.results_truncated" : "media.truncated");
             }
         }
         this.els.status.textContent = message;
@@ -1353,6 +1547,7 @@ class App {
     onState(state) {
         this.lastState = state;
         this.player.update(state.mpris);
+        this.player.updateLast(state.system.media?.last);
         this.audio.update(state.audio);
         this.remote.update(state.input);
         this.text.update(state.input);

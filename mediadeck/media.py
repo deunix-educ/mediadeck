@@ -8,19 +8,23 @@ fichier dont l'extension n'est pas un média connu : jamais d'exécutable ni de 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import re
+import time
 import unicodedata
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, unquote, urlparse
 
 from aiohttp import web
 
 from .config import Config
 from .restapi import bearer_authorized, error_response, json_response
+from .thumbs import SIZES, Thumbnailer
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +48,16 @@ EXTENSION_TYPES: dict[str, str] = {
 MAX_ENTRIES = 1000  # entrées renvoyées par dossier
 MAX_SCANNED = 20000  # entrées examinées par dossier, pour borner le temps de parcours
 MAX_PATH_LENGTH = 1000
+
+MAX_RESULTS = 300  # résultats d'une recherche
+MAX_SEARCH_SCANNED = 200000  # entrées examinées par recherche
+SEARCH_SECONDS = 4.0  # durée maximale d'une recherche
+MAX_QUERY_LENGTH = 100
+MAX_QUERY_WORDS = 8
+
+# Images d'accompagnement d'un fichier son ou vidéo, par ordre de préférence (nom sans extension, en minuscules)
+ART_NAMES = ("cover", "folder", "front", "poster", "albumart", "thumb")
+ART_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 
 _NUMBER_RE = re.compile(r"(\d+)")
 _USER_DIR_RE = re.compile(r'^XDG_(MUSIC|VIDEOS|PICTURES)_DIR="(.*)"\s*$')
@@ -97,11 +111,34 @@ def _inside(base: Path, path: Path) -> bool:
     return path == base or base in path.parents
 
 
+def _fold(text: str) -> str:
+    """Minuscules sans accents : « Été » et « ete » se correspondent."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(char for char in decomposed if not unicodedata.combining(char)).casefold()
+
+
+def thumb_url(root_id: str, relative: str, size: int, version: int) -> str:
+    """Adresse de la miniature ; le client y ajoute le jeton (comme pour /art). ``version`` : date du fichier."""
+    return f"/thumb?root={quote(root_id)}&path={quote(relative)}&size={size}&v={version}"
+
+
+@dataclass(frozen=True)
+class Located:
+    """Un fichier média situé dans une racine."""
+
+    root: str
+    relative: str
+    type: str
+    real: Path
+
+
 class MediaLibrary:
     """Dossiers autorisés (configuration) et accès aux fichiers qu'ils contiennent."""
 
-    def __init__(self, roots: Iterable[Path] | None) -> None:
+    def __init__(self, roots: Iterable[Path] | None, thumbnails: bool = False) -> None:
         paths = list(roots) if roots is not None else user_media_dirs()
+        self.thumbnails = thumbnails
+        self._last: dict[str, Any] | None = None
         self._roots: dict[str, MediaRoot] = {}
         for path in paths:
             base, counter = _slug(path.name), 1
@@ -116,7 +153,86 @@ class MediaLibrary:
         return list(self._roots.values())
 
     def snapshot(self) -> dict[str, Any]:
-        return {"roots": [{"id": root.id, "name": root.name} for root in self._roots.values()]}
+        return {
+            "roots": [{"id": root.id, "name": root.name} for root in self._roots.values()],
+            "thumbnails": self.thumbnails,
+            "last": self._last,
+        }
+
+    def remember(self, located: Located) -> None:
+        """Garde le dernier fichier ouvert (titre et image) pour l'onglet Lecture."""
+        self._last = {
+            "name": Path(located.relative).stem,
+            "type": located.type,
+            "art": self._art_url(located),
+        }
+
+    def _art_url(self, located: Located, size: int = 640) -> str | None:
+        if not self.thumbnails:
+            return None
+        try:
+            version = int(located.real.stat().st_mtime)
+        except OSError:
+            return None
+        return thumb_url(located.root, located.relative, size, version)
+
+    def locate(self, path: Path) -> Located | None:
+        """Retrouve, à partir d'un chemin absolu (ex. xesam:url d'un lecteur), le fichier média d'une racine."""
+        try:
+            real = path.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return None
+        media_type = EXTENSION_TYPES.get(real.suffix.lower())
+        if media_type is None or not real.is_file():
+            return None
+        for root in self._roots.values():
+            try:
+                base = root.path.resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if _inside(base, real) and real != base:
+                parts = real.relative_to(base).parts
+                if any(part.startswith(".") for part in parts):
+                    return None
+                return Located(root.id, "/".join(parts), media_type, real)
+        return None
+
+    def enrich(self, metadata: dict[str, Any]) -> None:
+        """Complète les métadonnées d'un lecteur MPRIS qui joue un fichier de la bibliothèque : titre et image."""
+        url = metadata.get("url")
+        if not isinstance(url, str) or not url.startswith("file://"):
+            return
+        located = self.locate(Path(unquote(urlparse(url).path)))
+        if located is None:
+            return
+        if not metadata.get("title"):
+            metadata["title"] = Path(located.relative).stem
+        art = self._art_url(located)
+        if art is not None and not metadata.get("art"):
+            metadata["art"] = art
+
+    def find_art(self, root_id: str, file: Path) -> Path | None:
+        """Image qui accompagne un fichier son ou vidéo : « nom.jpg », « nom-poster.jpg », puis cover/folder/poster…"""
+        root = self._roots.get(root_id)
+        if root is None:
+            return None
+        stem = file.stem.casefold()
+        wanted = [stem, f"{stem}-poster", f"{stem}-thumb", f"{stem}-cover", *ART_NAMES]
+        best: tuple[int, Path] | None = None
+        try:
+            base = root.path.resolve(strict=True)
+            with os.scandir(file.parent) as iterator:
+                for entry in iterator:
+                    name, extension = os.path.splitext(entry.name.casefold())
+                    if extension not in ART_EXTENSIONS or name not in wanted or not entry.is_file():
+                        continue
+                    rank = wanted.index(name)
+                    candidate = Path(entry.path).resolve(strict=True)
+                    if _inside(base, candidate) and (best is None or rank < best[0]):
+                        best = (rank, candidate)
+        except (OSError, RuntimeError):
+            return None
+        return best[1] if best else None
 
     def describe(self) -> list[str]:
         """Une ligne par dossier, pour le journal de démarrage."""
@@ -157,8 +273,8 @@ class MediaLibrary:
         base, parts, directory = self._resolve(root_id, relative)
         if not directory.is_dir():
             raise MediaError("not a folder")
-        folders: list[tuple[str, str]] = []
-        files: list[tuple[str, str]] = []
+        folders: list[tuple[str, str, int]] = []
+        files: list[tuple[str, str, int]] = []
         scanned = 0
         try:
             with os.scandir(directory) as iterator:
@@ -168,9 +284,9 @@ class MediaLibrary:
                         break
                     kind = self._classify(base, entry)
                     if kind == "dir":
-                        folders.append((entry.name, kind))
+                        folders.append((entry.name, kind, 0))
                     elif kind is not None:
-                        files.append((entry.name, kind))
+                        files.append((entry.name, kind, self._version(entry) if kind == "image" else 0))
         except OSError as exc:
             raise MediaError(f"cannot read the folder: {exc.strerror}") from exc
         ordered = [
@@ -181,9 +297,21 @@ class MediaLibrary:
             "root": root_id,
             "path": "/".join(parts),
             "parent": "/".join(parts[:-1]) if parts else None,
-            "entries": [{"name": name, "kind": kind} for name, kind in ordered[:MAX_ENTRIES]],
+            "entries": [self._entry(name, kind, version) for name, kind, version in ordered[:MAX_ENTRIES]],
             "truncated": len(ordered) > MAX_ENTRIES or scanned > MAX_SCANNED,
         }
+
+    @staticmethod
+    def _version(entry: os.DirEntry[str]) -> int:
+        """Date du fichier : change l'adresse de la miniature quand l'image est modifiée."""
+        try:
+            return int(entry.stat().st_mtime)
+        except OSError:
+            return 0
+
+    @staticmethod
+    def _entry(name: str, kind: str, version: int) -> dict[str, Any]:
+        return {"name": name, "kind": kind, "v": version} if kind == "image" else {"name": name, "kind": kind}
 
     @staticmethod
     def _classify(base: Path, entry: os.DirEntry[str]) -> str | None:
@@ -210,26 +338,104 @@ class MediaLibrary:
             return "dir"
         return EXTENSION_TYPES.get(os.path.splitext(name)[1].lower()) if is_file else None
 
-    def file(self, root_id: Any, relative: Any) -> tuple[Path, str]:
-        """Fichier média à ouvrir : (chemin réel, type). Le type vient de l'extension du fichier réel."""
+    def resolve_file(self, root_id: Any, relative: Any) -> Located:
+        """Fichier média désigné par (racine, chemin relatif). Le type vient de l'extension du fichier réel."""
         _base, parts, real = self._resolve(root_id, relative)
         if not parts or not real.is_file():
             raise MediaError("not a file")
         media_type = EXTENSION_TYPES.get(real.suffix.lower())
         if media_type is None:
             raise MediaError("not a media file")
-        return real, media_type
+        return Located(str(root_id), "/".join(parts), media_type, real)
+
+    def file(self, root_id: Any, relative: Any) -> tuple[Path, str]:
+        """Fichier média à ouvrir : (chemin réel, type)."""
+        located = self.resolve_file(root_id, relative)
+        return located.real, located.type
+
+    @staticmethod
+    def _search_words(query: Any) -> list[str]:
+        if not isinstance(query, str) or len(query) > MAX_QUERY_LENGTH:
+            raise MediaError("invalid search")
+        words = _fold(query).split()
+        if sum(len(word) for word in words) < 2 or len(words) > MAX_QUERY_WORDS:
+            raise MediaError("search needs 2 to 100 characters")
+        return words
+
+    def search(self, query: Any, root_id: Any = None, relative: Any = "") -> dict[str, Any]:
+        """Recherche par nom (sans accents ni casse, tous les mots) dans un dossier et ses sous-dossiers, ou dans
+        toutes les racines si ``root_id`` est absent. Bornée en résultats, en examens et en durée (appel bloquant)."""
+        words = self._search_words(query)
+        starts: list[tuple[str, Path, Path]] = []  # (racine, base réelle, dossier de départ)
+        if root_id in (None, ""):
+            for root in self._roots.values():
+                try:
+                    base = root.path.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    continue
+                starts.append((root.id, base, base))
+        else:
+            base, _parts, directory = self._resolve(root_id, relative)
+            if not directory.is_dir():
+                raise MediaError("not a folder")
+            starts.append((str(root_id), base, directory))
+
+        deadline = time.monotonic() + SEARCH_SECONDS
+        results: list[dict[str, Any]] = []
+        scanned = 0
+        truncated = False
+        for rid, base, start in starts:
+            stack = [start]
+            while stack and not truncated:
+                directory = stack.pop()
+                try:
+                    with os.scandir(directory) as iterator:
+                        for entry in iterator:
+                            scanned += 1
+                            if scanned > MAX_SEARCH_SCANNED or time.monotonic() > deadline:
+                                truncated = True
+                                break
+                            kind = self._classify(base, entry)
+                            if kind is None:
+                                continue
+                            if kind == "dir" and not entry.is_symlink():
+                                stack.append(Path(entry.path))  # les liens ne sont pas suivis : pas de boucle possible
+                            folded = _fold(entry.name)
+                            if all(word in folded for word in words):
+                                folder = Path(directory).relative_to(base).parts
+                                found = self._entry(entry.name, kind, self._version(entry) if kind == "image" else 0)
+                                results.append({**found, "root": rid, "folder": "/".join(folder)})
+                except OSError:
+                    continue  # dossier illisible : on passe au suivant
+        results.sort(
+            key=lambda item: (
+                item["kind"] != "dir",
+                _natural_key(item["root"]),
+                _natural_key(item["folder"]),
+                _natural_key(item["name"]),
+            )
+        )
+        return {
+            "query": query,
+            "root": None if root_id in (None, "") else root_id,
+            "entries": results[:MAX_RESULTS],
+            "truncated": truncated or len(results) > MAX_RESULTS,
+        }
 
 
 class MediaApi:
     """GET /api/media?root=…&path=… : contenu d'un dossier (jeton en en-tête Authorization)."""
 
-    def __init__(self, config: Config, library: MediaLibrary) -> None:
+    def __init__(self, config: Config, library: MediaLibrary, thumbnailer: Thumbnailer | None = None) -> None:
         self._config = config
         self._library = library
+        self._thumbnailer = thumbnailer
 
     def add_routes(self, app: web.Application) -> None:
         app.router.add_get("/api/media", self.browse)
+        app.router.add_get("/api/media/search", self.search)
+        if self._thumbnailer is not None and self._thumbnailer.available:
+            app.router.add_get("/thumb", self.thumb)
 
     async def browse(self, request: web.Request) -> web.StreamResponse:
         if not bearer_authorized(request, self._config.token):
@@ -243,3 +449,49 @@ class MediaApi:
         except MediaError as exc:
             return error_response(400, str(exc))
         return json_response(listing)
+
+    async def search(self, request: web.Request) -> web.StreamResponse:
+        if not bearer_authorized(request, self._config.token):
+            return error_response(401, "invalid or missing token")
+        try:
+            result = await asyncio.to_thread(
+                self._library.search,
+                request.query.get("q"),
+                request.query.get("root"),
+                request.query.get("path", ""),
+            )
+        except MediaNotFound as exc:
+            return error_response(404, str(exc))
+        except MediaError as exc:
+            return error_response(400, str(exc))
+        return json_response(result)
+
+    async def thumb(self, request: web.Request) -> web.StreamResponse:
+        """Miniature d'un fichier. Le jeton est dans l'URL comme pour /art : une balise <img> n'envoie pas d'en-tête."""
+        supplied = request.query.get("token", "")
+        if not hmac.compare_digest(supplied.encode(), self._config.token.encode()):
+            raise web.HTTPUnauthorized()
+        assert self._thumbnailer is not None
+        try:
+            size = int(request.query.get("size", "0"))
+        except ValueError:
+            size = 0
+        if size not in SIZES:
+            raise web.HTTPBadRequest(text=f"size must be one of {', '.join(map(str, SIZES))}")
+        try:
+            located = await asyncio.to_thread(
+                self._library.resolve_file, request.query.get("root"), request.query.get("path")
+            )
+        except MediaNotFound as exc:
+            raise web.HTTPNotFound(text=str(exc)) from exc
+        except MediaError as exc:
+            raise web.HTTPBadRequest(text=str(exc)) from exc
+        art = None
+        if located.type != "image":
+            art = await asyncio.to_thread(self._library.find_art, located.root, located.real)
+        image = await self._thumbnailer.thumbnail(located.real, located.type, size, art)
+        if image is None:
+            raise web.HTTPNotFound(text="no thumbnail")
+        return web.FileResponse(
+            image, headers={"Content-Type": "image/jpeg", "Cache-Control": "private, max-age=86400"}
+        )

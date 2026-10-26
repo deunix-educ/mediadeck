@@ -9,9 +9,9 @@ The PC runs a small Python bridge; the tablet only needs a browser.
 
 | Tab | Content | PC side |
 |---|---|---|
-| **Playing** | Cover art, title, progress, play/pause, next/previous, shuffle, repeat, player volume, player selection | MPRIS (session D-Bus): Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
+| **Playing** | Cover art (or, failing that, an image of the file played), title (or file name), progress, play/pause, next/previous, shuffle, repeat, player volume, player selection | MPRIS (session D-Bus): Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
 | | **Volume bar** under the player: master volume, mute; the active output's button opens a window with the output selection (HDMI, Bluetooth…) and per-output volume; the bar is always visible | `pactl` (PipeWire or PulseAudio) |
-| **Media** | Sound, image and video files from the PC's folders, shown as icons; a tap opens the file **on the PC** with the player chosen for its type | `gio`; folders and players: see "Media" |
+| **Media** | Sound, image and video files from the PC's folders, as icons (thumbnails for images) with search; a tap opens the file **on the PC** with the player chosen for its type | `gio`; folders and players: see "Media" |
 | **Touchpad** | Touchpad (click, right click, 2-finger scroll), D-pad, Esc, Space, F, F11…, text entry with the tablet's keyboard | `/dev/uinput`: works on X11 **and** Wayland |
 | **Launchers** | Configurable buttons: websites and installed applications (`/admin` page) | browser, `gio launch` |
 | **System** | Lock, sleep, restart, shut down (1 s long press): sensitive operations, kept apart from launchers | logind, `org.freedesktop.ScreenSaver` |
@@ -38,7 +38,7 @@ KDE Connect is not required; it can stay installed for its other features.
 ## Installation (Debian / LMDE)
 
 ```bash
-make deps             # system packages (sudo): venv, gcc, pactl, qrencode
+make deps             # system packages (sudo): venv, gcc, pactl, qrencode, ffmpeg
 make install          # .venv + Python dependencies
 make config           # ~/.config/mediadeck/config.toml (mode 600) with a random token
 make uinput           # "uaccess" udev rule for /dev/uinput (sudo)
@@ -115,7 +115,7 @@ Changes show up on the tablet immediately.
 ## Media
 
 The **Media** tab (shown as soon as at least one folder is configured) lists **sound**, **image** and **video** files
-as icons: subfolders, breadcrumb, back button, All / Sounds / Images / Videos filter. Tapping a file **opens it on the
+as icons: subfolders, breadcrumb, back button, All / Sounds / Images / Videos filter, search. Tapping a file **opens it on the
 PC**; the tablet stays a remote control.
 
 - **Folders**: `[media] roots` in `config.toml` (absolute paths or `~/…`). Without this key, the user's Music, Videos
@@ -133,9 +133,21 @@ PC**; the tablet stays a remote control.
 - **Security**: the client never sends an absolute path, only a root folder and a relative path. The server refuses
   `..`, absolute paths, hidden entries (`.x`) and anything symbolic links would take out of the root. Only known media
   extensions are listed and opened (never a script, even renamed `.mp3` or linked to a `.sh`). `GET /api/media`
-  requires the token in the `Authorization` header. A folder shows at most 1000 entries. The token gives access to the
+  requires the token in the `Authorization` header; thumbnails (`/thumb`) have it in the URL, like `/art`, because an
+  image tag sends no header. `ffmpeg` runs with no standard input, limited to local files, with a timeout and at most
+  three processes; an image is read by the image decoder only (a playlist disguised as `.jpg` yields nothing). A folder shows at most 1000 entries. The token gives access to the
   **names** of the files in these folders: only configure what may be seen from the tablet.
-- No thumbnails: one icon per type, as in the Launchers tab.
+- **Search**: the "Search…" field looks in file and folder **names** (ignoring accents and case, every word must appear)
+  in the folder shown and its subfolders, or in all folders from the first level. Results show their folder; a tap
+  opens the file or folder. At most 300 results and 4 seconds; symbolic links are not followed.
+- **Thumbnails**: images (jpg, png, gif, webp, bmp, tiff; not HEIC or AVIF) are shown as thumbnails, made by `ffmpeg`
+  (`apt install ffmpeg`, installed by `make deps`) and kept in `~/.cache/mediadeck/thumbs` (3000 files at most).
+  Without ffmpeg, or for an unreadable image, the icon stays. `[media] thumbnails = false` turns them off.
+- **Title and image in the Playing tab**: when a player plays a file from a configured folder, the tab shows its title
+  (the file name if the player gives none) and an image: the player's own, else an image from the folder
+  (`<name>.jpg`, `<name>-poster.jpg`, `poster.jpg`, `cover.jpg`, `folder.jpg`…), else the cover embedded in a sound file
+  or a frame taken from the video. Without an MPRIS player (image viewer, silent player), the tab shows the **last file
+  opened** from the Media tab, with its title and image.
 
 ## Text entry
 

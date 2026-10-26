@@ -28,6 +28,7 @@ from .media import MediaApi, MediaLibrary
 from .mpris import MprisManager
 from .system import SystemControl
 from .text import TextTyper
+from .thumbs import Thumbnailer
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +84,12 @@ class MediaDeckServer:
         self.text = TextTyper(self.input, config.enable_text_input, self._keyboard_layout)
         self.system: SystemControl | None = None
         self.launchers = LauncherStore()
-        self.media = MediaLibrary(config.media_roots)
+        self.thumbnailer = Thumbnailer() if config.media_thumbnails else None
+        self.media = MediaLibrary(
+            config.media_roots, thumbnails=self.thumbnailer is not None and self.thumbnailer.available
+        )
+        if config.media_thumbnails and not self.media.thumbnails:
+            log.info("ffmpeg not found: no thumbnails (apt install ffmpeg)")
         for line in self.media.describe():
             log.info("media folder %s", line)
         imported = self.launchers.seed(config.launchers)
@@ -102,7 +108,12 @@ class MediaDeckServer:
             self.mpris = MprisManager(self._bus, self.notify)
             await self.mpris.start()
             self.system = SystemControl(
-                self._bus, self.launchers, self.media, self._config.enable_power, self._config.admin_enabled
+                self._bus,
+                self.launchers,
+                self.media,
+                self._config.enable_power,
+                self._config.admin_enabled,
+                self.notify,
             )
             await self.system.start()
         except Exception as exc:  # noqa: BLE001 - lancé hors session graphique
@@ -119,6 +130,8 @@ class MediaDeckServer:
         self.text.close()
         self.input.close()
         self.launchers.close()
+        if self.mpris is not None:
+            self.mpris.stop()
         if self._bus is not None:
             self._bus.disconnect()
 
@@ -137,7 +150,7 @@ class MediaDeckServer:
             app.router.add_get("/admin", self.admin_page)
             AdminApi(self._config, self.launchers, self.notify).add_routes(app)
         if self.media.roots:
-            MediaApi(self._config, self.media).add_routes(app)
+            MediaApi(self._config, self.media, self.thumbnailer).add_routes(app)
         if self._config.tls_ca is not None:
             app.router.add_get("/ca.crt", self.ca_certificate)
         app.router.add_get("/static/{version}/{path:.+}", versioned_static)
@@ -270,6 +283,8 @@ class MediaDeckServer:
         mpris_state: dict[str, Any] = {"players": [], "active": None, "available": False}
         if self.mpris is not None:
             mpris_state = {**await self.mpris.snapshot(), "available": True}
+            for player in mpris_state["players"]:
+                self.media.enrich(player["metadata"])  # titre et image d'un fichier de la bibliothèque
         system_state = (
             self.system.snapshot()
             if self.system

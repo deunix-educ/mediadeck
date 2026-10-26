@@ -243,7 +243,8 @@ svg {
 .empty {
     display: grid;
     place-items: center;
-    align-content: center;
+    /* « safe » : si le contenu dépasse la zone (fenêtre basse), il reste atteignable par défilement */
+    align-content: safe center;
     gap: 8px;
     height: 100%;
     color: var(--text-faint);
@@ -465,8 +466,15 @@ input[type="range"]:disabled {
     text-overflow: ellipsis;
 }
 
-.progress {
+/* Progression + commandes : collées en bas de la zone du lecteur. Quand la fenêtre est basse, le titre défile
+   dessous et les boutons restent atteignables (sinon ils sortaient de la zone visible). */
+.controls {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
     margin-top: 28px;
+    padding: 6px 0 4px;
+    background: var(--bg);
 }
 
 .times {
@@ -505,6 +513,57 @@ input[type="range"]:disabled {
 .play-btn svg {
     width: 40px;
     height: 40px;
+}
+
+/* Onglet Lecture sans lecteur : dernier fichier ouvert depuis l'onglet Médias */
+.last-media {
+    display: grid;
+    justify-items: center;
+    gap: 10px;
+    max-width: min(100%, 360px);
+}
+
+.last-media .sub {
+    margin: 0;
+}
+
+.last-art {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: min(60vw, 240px, 32dvh);
+    aspect-ratio: 1;
+    border-radius: var(--radius);
+    background: var(--surface-2);
+    overflow: hidden;
+    box-shadow: 0 16px 40px rgb(0 0 0 / 0.5);
+}
+
+.last-art img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.last-art svg {
+    width: 36%;
+    height: 36%;
+    color: var(--surface-3);
+}
+
+.last-media h2 {
+    position: relative; /* au-dessus de l'ombre portée de l'image, qui est positionnée */
+    display: -webkit-box;
+    margin: 0;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow-wrap: anywhere;
+    color: var(--text);
+    font-size: 20px;
+    line-height: 1.25;
 }
 
 .player-extra {
@@ -706,12 +765,25 @@ input[type="range"]:disabled {
     color: var(--text-faint);
 }
 
+.media-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 12px;
+    margin-bottom: 16px;
+}
+
 .media-filters {
     display: flex;
     gap: 8px;
-    margin-bottom: 16px;
+    max-width: 100%;
     overflow-x: auto;
     scrollbar-width: none;
+}
+
+.media-search {
+    flex: 1 1 220px;
+    min-width: 0;
 }
 
 .media-grid {
@@ -727,7 +799,7 @@ input[type="range"]:disabled {
     align-items: center;
     gap: 8px;
     min-width: 0;
-    min-height: 124px;
+    min-height: 132px;
     padding: 16px 8px 12px;
     border: 1px solid var(--line);
     border-radius: var(--radius);
@@ -751,6 +823,31 @@ input[type="range"]:disabled {
     width: 44px;
     height: 44px;
     color: var(--tile);
+}
+
+/* Miniature d'image : remplace l'icône (l'icône revient si l'image ne peut pas être fabriquée) */
+.media-tile .thumb {
+    flex: none;
+    width: 100%;
+    height: 84px;
+    border-radius: 10px;
+    background: var(--surface-2);
+    object-fit: cover;
+}
+
+.media-tile.has-thumb {
+    padding: 8px 8px 10px;
+}
+
+/* Résultat de recherche : dossier où se trouve le fichier */
+.media-tile small {
+    display: block;
+    width: 100%;
+    overflow: hidden;
+    color: var(--text-faint);
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .media-tile span {
@@ -1204,6 +1301,10 @@ input[type="password"] {
         gap: 8px 12px;
     }
 
+    .volume-bar input[type="range"] {
+        flex-basis: 80px;
+    }
+
     .volume-bar .value {
         min-width: 56px;
         font-size: 20px;
@@ -1225,7 +1326,7 @@ input[type="password"] {
         height: 32px;
     }
 
-    .progress {
+    .controls {
         margin-top: 14px;
     }
 
@@ -1246,6 +1347,38 @@ input[type="password"] {
     }
 }
 
+/* Hauteur réduite : l'album et le volume propre du lecteur (doublon de la barre de volume) cèdent la place ;
+   sinon ils seraient coupés à moitié au bas de la zone du lecteur */
+@media (orientation: landscape) and (max-height: 620px) {
+    .track-album,
+    .player-extra {
+        display: none;
+    }
+}
+
+/* Carte « Dernier fichier ouvert » sur une fenêtre basse : image réduite, titre sur une ligne */
+@media (orientation: landscape) and (max-height: 520px) {
+    .last-art {
+        width: min(60vw, 240px, 22dvh);
+    }
+
+    .last-media h2 {
+        -webkit-line-clamp: 1;
+        font-size: 16px;
+    }
+
+    .empty:has(.last-media:not([hidden])) > p {
+        display: none;
+    }
+}
+
+/* Très peu de hauteur : seuls le titre et les commandes restent */
+@media (orientation: landscape) and (max-height: 480px) {
+    .track-artist {
+        display: none;
+    }
+}
+
 /* Très peu de hauteur (paysage de téléphone) : on garde l'essentiel, le reste reste atteignable par la tablette en paysage plus haut */
 @media (orientation: landscape) and (max-height: 560px) {
     .topbar {
@@ -1260,9 +1393,14 @@ input[type="password"] {
         padding-bottom: 12px;
     }
 
-    .track-album,
-    .player-extra {
-        display: none;
+    .track-title {
+        -webkit-line-clamp: 1;
+        font-size: 22px;
+    }
+
+    .track-artist {
+        margin-top: 4px;
+        font-size: 16px;
     }
 
     .volume-bar {
@@ -1282,13 +1420,15 @@ input[type="password"] {
 
     .now-playing {
         grid-template-columns: 1fr;
+        /* Lignes à leur taille réelle : quand la zone est trop basse elle défile, au lieu d'écraser la pochette */
+        grid-auto-rows: max-content;
         gap: 20px;
         align-content: start;
         height: auto;
     }
 
     .cover {
-        width: min(100%, 30dvh);
+        width: min(100%, 25dvh);
     }
 
     .remote-view {
@@ -1306,5 +1446,29 @@ input[type="password"] {
 
     .volume-bar {
         padding: 10px 12px;
+    }
+}
+
+/* Portrait et hauteur moyenne (téléphone) : l'album et le volume propre du lecteur (doublon de la barre de volume)
+   cèdent la place, sinon ils seraient coupés au bas de la zone */
+@media (orientation: portrait) and (max-height: 860px) {
+    .cover {
+        width: min(100%, 22dvh);
+    }
+
+    .now-playing {
+        gap: 14px;
+    }
+
+    .track-album,
+    .player-extra {
+        display: none;
+    }
+}
+
+/* Portrait et peu de hauteur (petit téléphone) : la pochette ne laisserait pas la place au titre et aux commandes */
+@media (orientation: portrait) and (max-height: 700px) {
+    .cover {
+        display: none;
     }
 }

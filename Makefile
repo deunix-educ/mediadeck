@@ -25,7 +25,7 @@ help: ## Affiche cette aide
 deps: ## Installe les paquets système (sudo)
 	sudo apt-get update
 	sudo apt-get install -y python3-venv python3-dev gcc linux-libc-dev \
-		pulseaudio-utils qrencode libglib2.0-bin libxkbcommon0 xkb-data
+		pulseaudio-utils qrencode libglib2.0-bin libxkbcommon0 xkb-data ffmpeg
 
 $(PYTHON):
 	python3 -m venv $(VENV)

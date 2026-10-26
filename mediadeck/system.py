@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from dbus_next.constants import BusType
@@ -30,10 +31,12 @@ class SystemControl:
         media: MediaLibrary,
         enable_power: bool,
         admin_enabled: bool,
+        on_change: Callable[[], None],
     ) -> None:
         self._session_bus = session_bus
         self._launchers = launchers
         self._media = media
+        self._on_change = on_change
         self._enable_power = enable_power
         self._admin_enabled = admin_enabled
         self._logind: Any = None
@@ -99,11 +102,14 @@ class SystemControl:
 
     async def _open_media(self, root: Any, path: Any) -> None:
         """Ouvre un fichier de l'onglet Médias avec le lecteur de son type ; le chemin est résolu côté serveur."""
-        file, media_type = await asyncio.to_thread(self._media.file, root, path)
-        opener = self._launchers.openers()[media_type]
-        command = build_open_argv(opener, file)
-        log.info("opening %s file with %s: %s", media_type, opener.kind, command)
+        located = await asyncio.to_thread(self._media.resolve_file, root, path)
+        opener = self._launchers.openers()[located.type]
+        command = build_open_argv(opener, located.real)
+        log.info("opening %s file with %s: %s", located.type, opener.kind, command)
         await self._spawn(command)
+        # L'onglet Lecture montre le titre et l'image du dernier fichier ouvert, même sans lecteur MPRIS
+        self._media.remember(located)
+        self._on_change()
 
     async def _spawn(self, command: list[str]) -> None:
         # Session séparée : le programme survit à un redémarrage du service

@@ -97,6 +97,12 @@ class ParseConfigTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_config({"server": {"token": TOKEN}, "media": []})
 
+    def test_media_thumbnails_switch(self) -> None:
+        self.assertTrue(parse_config({"server": {"token": TOKEN}}).media_thumbnails)
+        self.assertFalse(parse_config({"server": {"token": TOKEN}, "media": {"thumbnails": False}}).media_thumbnails)
+        with self.assertRaises(ConfigError):
+            parse_config({"server": {"token": TOKEN}, "media": {"thumbnails": "oui"}})
+
     def test_max_volume_bounds(self) -> None:
         with self.assertRaises(ConfigError):
             parse_config({"server": {"token": TOKEN}, "audio": {"max_volume": 3}})
