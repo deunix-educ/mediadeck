@@ -41,6 +41,8 @@
         <symbol id="i-back" viewBox="0 0 24 24"><path d="M9 7L4 12l5 5M4.5 12H15a5 5 0 0 1 0 10h-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
         <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
         <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+        <symbol id="i-image" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="10" r="1.7" fill="currentColor"/><path d="M4 17l5-4.5 3.5 3 3-2.5 4.5 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
         <symbol id="i-window" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M3.5 9h17" stroke="currentColor" stroke-width="1.8"/></symbol>
     </svg>
 
@@ -133,6 +135,18 @@
                 <p class="sub audio-none" id="audio-empty" data-i18n="audio.none" hidden></p>
             </section>
 
+            <!-- Médias : fichiers son, image et vidéo des dossiers du PC ; chaque icône ouvre le fichier sur le PC -->
+            <section class="panel" id="panel-media" data-panel="media" hidden>
+                <div class="media-bar">
+                    <button class="icon-btn" id="media-up" type="button" data-i18n-label="media.up"><svg><use href="#i-left"/></svg></button>
+                    <nav class="crumbs" id="media-crumbs" data-i18n-label="media.path"></nav>
+                    <button class="icon-btn" id="media-refresh" type="button" data-i18n-label="media.refresh"><svg><use href="#i-restart"/></svg></button>
+                </div>
+                <div class="media-filters" id="media-filters" role="group" data-i18n-label="media.filter"></div>
+                <div class="media-grid" id="media-grid"></div>
+                <p class="sub media-status" id="media-status" role="status" hidden></p>
+            </section>
+
             <!-- Pavé tactile -->
             <section class="panel" id="panel-remote" data-panel="remote" hidden>
                 <div class="empty" id="remote-empty" hidden>
@@ -203,6 +217,7 @@
 
         <nav class="tabbar" id="tabbar">
             <button class="tab active" type="button" data-tab="player"><svg><use href="#i-music"/></svg><span data-i18n="tab.player"></span></button>
+            <button class="tab" type="button" data-tab="media" hidden><svg><use href="#i-folder"/></svg><span data-i18n="tab.media"></span></button>
             <button class="tab" type="button" data-tab="remote"><svg><use href="#i-touch"/></svg><span data-i18n="tab.remote"></span></button>
             <button class="tab" type="button" data-tab="launchers"><svg><use href="#i-app"/></svg><span data-i18n="tab.launchers"></span></button>
             <button class="tab" type="button" data-tab="system"><svg><use href="#i-power"/></svg><span data-i18n="tab.system"></span></button>

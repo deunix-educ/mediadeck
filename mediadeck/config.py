@@ -56,6 +56,8 @@ class Config:
     allow_custom_command: bool = False
     # Saisie de texte depuis la tablette : équivaut à un clavier complet, donc désactivée par défaut
     enable_text_input: bool = False
+    # Dossiers parcourus par l'onglet Médias ; None = dossiers Musique / Vidéos / Images de l'utilisateur, () = onglet désactivé
+    media_roots: tuple[Path, ...] | None = None
 
     @property
     def tls_enabled(self) -> bool:
@@ -72,6 +74,20 @@ def _parse_path(server: dict[str, Any], key: str) -> Path | None:
     if not isinstance(value, str):
         raise ConfigError(f"server.{key} must be a string")
     return Path(value).expanduser() if value else None
+
+
+def _parse_media_roots(media: dict[str, Any]) -> tuple[Path, ...] | None:
+    """Dossiers de médias : chemins absolus (après ~), sans doublon ; absent = valeur par défaut, [] = désactivé."""
+    raw = media.get("roots")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not all(isinstance(item, str) and item for item in raw):
+        raise ConfigError("media.roots must be a list of folder paths")
+    roots = [Path(item).expanduser() for item in raw]
+    for root in roots:
+        if not root.is_absolute():
+            raise ConfigError(f"media.roots: '{root}' must be an absolute path (or start with ~)")
+    return tuple(dict.fromkeys(roots))
 
 
 def _parse_launchers(raw: Any) -> tuple[Launcher, ...]:
@@ -114,8 +130,9 @@ def parse_config(data: dict[str, Any]) -> Config:
     features = data.get("features", {})
     audio = data.get("audio", {})
     admin = data.get("admin", {})
-    if not all(isinstance(table, dict) for table in (server, features, audio, admin)):
-        raise ConfigError("[server], [features], [audio] and [admin] must be tables")
+    media = data.get("media", {})
+    if not all(isinstance(table, dict) for table in (server, features, audio, admin, media)):
+        raise ConfigError("[server], [features], [audio], [admin] and [media] must be tables")
 
     host = server.get("host", "0.0.0.0")
     port = server.get("port", 8765)
@@ -180,6 +197,7 @@ def parse_config(data: dict[str, Any]) -> Config:
         admin_enabled=admin_enabled,
         allow_custom_command=allow_custom_command,
         enable_text_input=enable_text_input,
+        media_roots=_parse_media_roots(media),
     )
 
 

@@ -670,6 +670,113 @@ input[type="range"]:disabled {
 }
 
 /* ------------------------------------------------------------------ */
+/* Médias                                                              */
+/* ------------------------------------------------------------------ */
+
+.media-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.crumbs {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    white-space: nowrap;
+}
+
+.crumb {
+    padding: 8px 10px;
+    border-radius: 999px;
+    color: var(--text-dim);
+    font-weight: 600;
+}
+
+.crumb.current {
+    color: var(--text);
+}
+
+.crumb-sep {
+    color: var(--text-faint);
+}
+
+.media-filters {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.media-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(124px, 1fr));
+    gap: 12px;
+}
+
+.media-tile {
+    --tile: var(--text-dim);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    min-height: 124px;
+    padding: 16px 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    text-align: center;
+}
+
+.media-tile[data-kind="audio"] {
+    --tile: var(--accent);
+}
+
+.media-tile[data-kind="image"] {
+    --tile: #5ec2d8;
+}
+
+.media-tile[data-kind="video"] {
+    --tile: #a99bff;
+}
+
+.media-tile svg {
+    width: 44px;
+    height: 44px;
+    color: var(--tile);
+}
+
+.media-tile span {
+    display: -webkit-box;
+    width: 100%;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.25;
+}
+
+.media-tile:active,
+.media-tile.opened {
+    border-color: var(--tile);
+    background: var(--surface-2);
+}
+
+.media-status {
+    margin: 16px 0 0;
+    text-align: center;
+}
+
+/* ------------------------------------------------------------------ */
 /* Pavé tactile                                                        */
 /* ------------------------------------------------------------------ */
 

@@ -11,6 +11,7 @@ The PC runs a small Python bridge; the tablet only needs a browser.
 |---|---|---|
 | **Playing** | Cover art, title, progress, play/pause, next/previous, shuffle, repeat, player volume, player selection | MPRIS (session D-Bus): Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
 | | **Volume bar** under the player: master volume, mute; the active output's button opens a window with the output selection (HDMI, Bluetooth…) and per-output volume; the bar is always visible | `pactl` (PipeWire or PulseAudio) |
+| **Media** | Sound, image and video files from the PC's folders, shown as icons; a tap opens the file **on the PC** with the player chosen for its type | `gio`; folders and players: see "Media" |
 | **Touchpad** | Touchpad (click, right click, 2-finger scroll), D-pad, Esc, Space, F, F11…, text entry with the tablet's keyboard | `/dev/uinput`: works on X11 **and** Wayland |
 | **Launchers** | Configurable buttons: websites and installed applications (`/admin` page) | browser, `gio launch` |
 | **System** | Lock, sleep, restart, shut down (1 s long press): sensitive operations, kept apart from launchers | logind, `org.freedesktop.ScreenSaver` |
@@ -28,6 +29,7 @@ mediadeck (aiohttp, systemd --user service)
    ├─ audio.py   → pactl list/set-sink-*, subscribe
    ├─ input.py   → python-evdev / uinput             (virtual keyboard + pointer)
    ├─ keymap.py / text.py → text entry following the PC's real keyboard layout (libxkbcommon)
+   ├─ media.py   → Media tab: allowed folders, safe browsing, /api/media API
    └─ system.py  → org.freedesktop.login1, ScreenSaver, launchers (SQLite database, /admin page)
 ```
 
@@ -76,6 +78,9 @@ text_input = false       # virtual keyboard: read "Text entry" before enabling
 enabled = true                 # /admin page and launcher API
 allow_custom_command = false   # true: allow raw commands from /admin
 
+[media]
+roots = ["~/Music", "~/Videos", "~/Pictures"]   # absent: the user's Music/Videos/Pictures folders; []: tab disabled
+
 # Imported once into the database at first start, then managed on /admin
 [[launchers]]
 id = "youtube"
@@ -106,6 +111,31 @@ Changes show up on the tablet immediately.
 - `enabled = false` turns off the page and the API; existing launchers keep working.
 - There is no automatic fullscreen with Firefox, whose kiosk mode ignores F11.
 - `gio` (package `libglib2.0-bin`, installed by `make deps`) starts installed applications.
+
+## Media
+
+The **Media** tab (shown as soon as at least one folder is configured) lists **sound**, **image** and **video** files
+as icons: subfolders, breadcrumb, back button, All / Sounds / Images / Videos filter. Tapping a file **opens it on the
+PC**; the tablet stays a remote control.
+
+- **Folders**: `[media] roots` in `config.toml` (absolute paths or `~/…`). Without this key, the user's Music, Videos
+  and Pictures folders are used (read from `~/.config/user-dirs.dirs`, never the whole home folder). `roots = []`
+  disables the tab. A single folder is opened directly; several appear as a first level.
+- **One special launcher per type** (Sound, Image, Video): the **file path is added as the last argument**. They are
+  set on the `/admin` page, "Media file players" section, with the same rules as launchers:
+
+  | Player | Command run | What the client can write |
+  |---|---|---|
+  | **System default application** (initial setting) | `gio open <file>` | nothing |
+  | **Installed application** | `gio launch <app>.desktop <file>` | nothing (picked from a list) |
+  | **Command** (e.g. `mpv --fs`) | `mpv --fs <file>` | anything: needs `allow_custom_command = true` |
+
+- **Security**: the client never sends an absolute path, only a root folder and a relative path. The server refuses
+  `..`, absolute paths, hidden entries (`.x`) and anything symbolic links would take out of the root. Only known media
+  extensions are listed and opened (never a script, even renamed `.mp3` or linked to a `.sh`). `GET /api/media`
+  requires the token in the `Authorization` header. A folder shows at most 1000 entries. The token gives access to the
+  **names** of the files in these folders: only configure what may be seen from the tablet.
+- No thumbnails: one icon per type, as in the Launchers tab.
 
 ## Text entry
 
@@ -216,6 +246,7 @@ without a certificate warning.
 
 ## Security
 
+- `/api/media` (file listing) requires the token in a header; opening a file goes through the WebSocket, with a root folder and a relative path validated on the server (see "Media").
 - `/ws` and `/art` require the token (constant-time comparison); only the HTML page is public.
 - The config file is rejected if it is readable by group or others.
 - `/art` only serves the `file://` cover of the requested player, and only images under 10 MB.
@@ -225,6 +256,8 @@ without a certificate warning.
 - Without `make cert`, or on the `http_port` port, traffic is plain HTTP (token included) and meant for a trusted LAN only. With HTTPS it is encrypted, but the port must still not be exposed outside the LAN: for remote access, go through WireGuard. `http_port` is disabled by default.
 
 ## Known limitations
+
+- **Old interface after an update**: if the tablet still shows the old version (missing tabs…), refresh the page **once** (browser menu → Refresh). Opening the same link or the home-screen shortcut reuses the cached page; refreshing replaces it, and the interface files are then versioned (`/static/<version>/…`), so they can no longer go stale. Also remember to **restart the server** after an update: the running Python code is not reloaded.
 
 - **Screen always on**: the Wake Lock API requires HTTPS (see "Local HTTPS"). Over HTTP, adjust the tablet's sleep setting or use a kiosk browser (Fully Kiosk Browser…).
 - **VPN on the tablet**: an active VPN on the client device cuts off the local network, and the page times out ("site can't be reached, took too long to respond"). Allow LAN connections in the VPN app (Proton VPN: Settings → Connection → Advanced settings → LAN connections), turn off Android's lockdown / kill switch, or disconnect the VPN.

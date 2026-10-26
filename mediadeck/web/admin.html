@@ -25,6 +25,12 @@
         <p class="sub" id="admin-empty" data-i18n="admin.empty" hidden></p>
 
         <button class="primary" id="admin-add" type="button" data-i18n="admin.add"></button>
+
+        <section class="openers" aria-labelledby="openers-title">
+            <h2 class="section-title" id="openers-title" data-i18n="openers.title"></h2>
+            <p class="sub" data-i18n="openers.help"></p>
+            <ul class="admin-list" id="opener-list"></ul>
+        </section>
     </main>
 
     <dialog id="launcher-dialog" aria-labelledby="form-title">
@@ -84,6 +90,43 @@
 
             <div class="form-actions">
                 <button class="chip" id="form-cancel" type="button" data-i18n="form.cancel"></button>
+                <button class="primary" type="submit" data-i18n="form.save"></button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="opener-dialog" aria-labelledby="opener-title">
+        <form id="opener-form" novalidate>
+            <h2 id="opener-title"></h2>
+
+            <label class="field">
+                <span data-i18n="form.kind"></span>
+                <select id="opener-kind"></select>
+            </label>
+
+            <p class="sub" data-opener-group="default" data-i18n="openers.default_help"></p>
+
+            <div data-opener-group="app" hidden>
+                <label class="field">
+                    <span data-i18n="form.app"></span>
+                    <input id="opener-app-filter" type="search" autocomplete="off" data-i18n-placeholder="form.app_filter">
+                </label>
+                <select id="opener-app" size="8" aria-label="Applications"></select>
+                <p class="sub" id="opener-apps-empty" data-i18n="form.apps_empty" hidden></p>
+            </div>
+
+            <div data-opener-group="command" hidden>
+                <label class="field">
+                    <span data-i18n="form.command"></span>
+                    <textarea id="opener-command" rows="5" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+                </label>
+                <p class="sub" id="opener-command-hint" data-i18n="openers.command_help"></p>
+            </div>
+
+            <p class="banner" id="opener-error" role="alert" hidden></p>
+
+            <div class="form-actions">
+                <button class="chip" id="opener-cancel" type="button" data-i18n="form.cancel"></button>
                 <button class="primary" type="submit" data-i18n="form.save"></button>
             </div>
         </form>

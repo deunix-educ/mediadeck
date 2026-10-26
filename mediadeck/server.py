@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
@@ -23,6 +24,7 @@ from .config import Config
 from .input import VirtualInput
 from .keymap import LayoutSpec, current_layout
 from .launchers import LauncherStore
+from .media import MediaApi, MediaLibrary
 from .mpris import MprisManager
 from .system import SystemControl
 from .text import TextTyper
@@ -30,6 +32,7 @@ from .text import TextTyper
 log = logging.getLogger(__name__)
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
+STATIC_DIR = WEB_DIR / "static"
 MAX_ART_BYTES = 10 * 1024 * 1024
 MAX_MESSAGE_BYTES = 4096
 STATE_REFRESH_SECONDS = 10.0
@@ -39,6 +42,32 @@ CSP = (
     "connect-src 'self' ws: wss:; style-src 'self'; script-src 'self'; "
     "base-uri 'none'; frame-ancestors 'none'"
 )
+
+
+def static_version(directory: Path = STATIC_DIR) -> str:
+    """Empreinte des fichiers statiques (chemin, taille, date) : change dès qu'un fichier change."""
+    digest = hashlib.sha1()
+    for path in sorted(directory.rglob("*")):
+        if path.is_file():
+            stat = path.stat()
+            digest.update(f"{path.relative_to(directory)}:{stat.st_size}:{stat.st_mtime_ns}\n".encode())
+    return digest.hexdigest()[:10]
+
+
+def render_page(name: str) -> web.Response:
+    """Page HTML dont les fichiers statiques pointent vers /static/<version>/… : après une mise à jour, la page
+    (toujours revalidée) fait charger de nouvelles URL, donc jamais un ancien script resté dans le cache."""
+    version = static_version()
+    html = (WEB_DIR / name).read_text(encoding="utf-8").replace('"/static/', f'"/static/{version}/')
+    return web.Response(text=html, content_type="text/html")
+
+
+async def versioned_static(request: web.Request) -> web.StreamResponse:
+    """/static/<version>/<fichier> : la version n'est que dans l'URL, ce qui permet un cache immuable."""
+    target = (STATIC_DIR / request.match_info["path"]).resolve()
+    if STATIC_DIR.resolve() not in target.parents or not target.is_file():
+        raise web.HTTPNotFound()
+    return web.FileResponse(target, headers={"Cache-Control": "public, max-age=31536000, immutable"})
 
 
 class MediaDeckServer:
@@ -54,6 +83,9 @@ class MediaDeckServer:
         self.text = TextTyper(self.input, config.enable_text_input, self._keyboard_layout)
         self.system: SystemControl | None = None
         self.launchers = LauncherStore()
+        self.media = MediaLibrary(config.media_roots)
+        for line in self.media.describe():
+            log.info("media folder %s", line)
         imported = self.launchers.seed(config.launchers)
         if imported:
             log.info("imported %d launcher(s) from the config file; manage them on /admin", imported)
@@ -70,7 +102,7 @@ class MediaDeckServer:
             self.mpris = MprisManager(self._bus, self.notify)
             await self.mpris.start()
             self.system = SystemControl(
-                self._bus, self.launchers, self._config.enable_power, self._config.admin_enabled
+                self._bus, self.launchers, self.media, self._config.enable_power, self._config.admin_enabled
             )
             await self.system.start()
         except Exception as exc:  # noqa: BLE001 - lancé hors session graphique
@@ -104,9 +136,13 @@ class MediaDeckServer:
         if self._config.admin_enabled:
             app.router.add_get("/admin", self.admin_page)
             AdminApi(self._config, self.launchers, self.notify).add_routes(app)
+        if self.media.roots:
+            MediaApi(self._config, self.media).add_routes(app)
         if self._config.tls_ca is not None:
             app.router.add_get("/ca.crt", self.ca_certificate)
-        app.router.add_static("/static", WEB_DIR / "static", show_index=False, follow_symlinks=False)
+        app.router.add_get("/static/{version}/{path:.+}", versioned_static)
+        # Anciennes adresses (page restée dans un cache) : toujours servies, mais revalidées
+        app.router.add_static("/static", STATIC_DIR, show_index=False, follow_symlinks=False)
         return app
 
     # ------------------------------------------------------------------
@@ -123,11 +159,11 @@ class MediaDeckServer:
 
     async def index(self, _request: web.Request) -> web.StreamResponse:
         # La page elle-même est publique : le jeton protège /ws et /art
-        return web.FileResponse(WEB_DIR / "index.html")
+        return render_page("index.html")
 
     async def admin_page(self, _request: web.Request) -> web.StreamResponse:
         # Page publique comme l'index : l'API /api/* exige le jeton (en-tête Authorization)
-        return web.FileResponse(WEB_DIR / "admin.html")
+        return render_page("admin.html")
 
     async def ca_certificate(self, _request: web.Request) -> web.StreamResponse:
         """Certificat public de la CA locale, à installer une fois sur la tablette."""
@@ -234,7 +270,11 @@ class MediaDeckServer:
         mpris_state: dict[str, Any] = {"players": [], "active": None, "available": False}
         if self.mpris is not None:
             mpris_state = {**await self.mpris.snapshot(), "available": True}
-        system_state = self.system.snapshot() if self.system else {"power": False, "admin": self._config.admin_enabled, "launchers": []}
+        system_state = (
+            self.system.snapshot()
+            if self.system
+            else {"power": False, "admin": self._config.admin_enabled, "launchers": [], "media": self.media.snapshot()}
+        )
         return {
             "type": "state",
             "version": __version__,
@@ -301,6 +341,9 @@ async def serve(app: web.Application, config: Config, ssl_context: ssl.SSLContex
 @web.middleware
 async def security_headers(request: web.Request, handler: Any) -> web.StreamResponse:
     response: web.StreamResponse = await handler(request)
+    # Pages et fichiers statiques : revalidés à chaque chargement (ETag, réponse 304), sinon une tablette garde
+    # de vieux scripts pendant des heures après une mise à jour. /art et l'API fixent déjà leur propre valeur.
+    response.headers.setdefault("Cache-Control", "no-cache")
     response.headers.setdefault("Content-Security-Policy", CSP)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "no-referrer")

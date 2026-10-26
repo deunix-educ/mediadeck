@@ -84,6 +84,19 @@ class ParseConfigTest(unittest.TestCase):
             with self.subTest(server=server), self.assertRaises(ConfigError):
                 parse_config({"server": {"token": TOKEN, **server}})
 
+    def test_media_roots(self) -> None:
+        self.assertIsNone(parse_config({"server": {"token": TOKEN}}).media_roots)  # défaut : dossiers de l'utilisateur
+        self.assertEqual(parse_config({"server": {"token": TOKEN}, "media": {"roots": []}}).media_roots, ())
+        config = parse_config({"server": {"token": TOKEN}, "media": {"roots": ["~/Musique", "/srv/films", "~/Musique"]}})
+        self.assertEqual(config.media_roots, (Path.home() / "Musique", Path("/srv/films")))
+
+    def test_media_roots_are_validated(self) -> None:
+        for roots in ("~/Musique", ["relatif/dossier"], [""], [3], ["~/a", None]):
+            with self.subTest(roots=roots), self.assertRaises(ConfigError):
+                parse_config({"server": {"token": TOKEN}, "media": {"roots": roots}})
+        with self.assertRaises(ConfigError):
+            parse_config({"server": {"token": TOKEN}, "media": []})
+
     def test_max_volume_bounds(self) -> None:
         with self.assertRaises(ConfigError):
             parse_config({"server": {"token": TOKEN}, "audio": {"max_volume": 3}})

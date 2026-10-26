@@ -13,8 +13,11 @@ from mediadeck.launchers import (
     LauncherError,
     LauncherNotFound,
     LauncherStore,
+    OpenerEntry,
     build_argv,
+    build_open_argv,
     validate,
+    validate_opener,
 )
 
 WEB = {"label": "Arte", "icon": "tv", "kind": "web", "spec": {"url": "https://www.arte.tv/fr/", "browser": "chromium"}}
@@ -183,6 +186,112 @@ class BuildArgvTest(unittest.TestCase):
             with mock.patch("mediadeck.launchers.desktop_dirs", return_value=[Path(tmp)]), \
                     mock.patch("mediadeck.launchers.shutil.which", return_value=None), self.assertRaises(LauncherError):
                 build_argv(entry)
+
+
+class OpenerStoreTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self._tmp.name) / "launchers.db"
+        self.store = LauncherStore(self.path)
+
+    def tearDown(self) -> None:
+        self.store.close()
+        self._tmp.cleanup()
+
+    def test_system_default_until_one_is_chosen(self) -> None:
+        openers = self.store.openers()
+        self.assertEqual(list(openers), ["audio", "image", "video"])
+        self.assertTrue(all(opener.kind == "default" and opener.spec == {} for opener in openers.values()))
+
+    def test_set_replaces_and_survives_reopening(self) -> None:
+        self.store.set_opener("video", "app", {"desktop_id": "vlc.desktop"})
+        self.store.set_opener("video", "command", {"argv": ["mpv", "--fs"]})
+        self.store.close()
+        self.store = LauncherStore(self.path)
+        openers = self.store.openers()
+        self.assertEqual((openers["video"].kind, openers["video"].spec), ("command", {"argv": ["mpv", "--fs"]}))
+        self.assertEqual(openers["audio"].kind, "default")
+
+    def test_database_refuses_unknown_types(self) -> None:
+        with self.assertRaises(Exception):
+            self.store.set_opener("document", "default", {})
+
+    def test_opener_table_added_to_an_existing_database(self) -> None:
+        # Base créée avant les lecteurs : seule la table des lanceurs existe
+        self.store.close()
+        import sqlite3
+
+        db = sqlite3.connect(self.path)
+        db.execute("DROP TABLE media_openers")
+        db.commit()
+        db.close()
+        self.store = LauncherStore(self.path)
+        self.assertEqual(self.store.openers()["audio"].kind, "default")
+
+
+class ValidateOpenerTest(unittest.TestCase):
+    def test_default_needs_no_spec(self) -> None:
+        self.assertEqual(validate_opener("audio", {"kind": "default"}, allow_command=False), ("audio", "default", {}))
+        # Un spec fourni avec « default » est ignoré : rien d'autre n'est enregistré
+        self.assertEqual(
+            validate_opener("audio", {"kind": "default", "spec": {"argv": ["rm"]}}, allow_command=False),
+            ("audio", "default", {}),
+        )
+
+    def test_app_must_be_installed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            write_desktop(Path(tmp), "vlc.desktop", "vlc")
+            with mock.patch("mediadeck.launchers.desktop_dirs", return_value=[Path(tmp)]):
+                self.assertEqual(
+                    validate_opener("video", {"kind": "app", "spec": {"desktop_id": "vlc.desktop"}}, allow_command=False),
+                    ("video", "app", {"desktop_id": "vlc.desktop"}),
+                )
+                with self.assertRaises(LauncherError):
+                    validate_opener("video", {"kind": "app", "spec": {"desktop_id": "../vlc.desktop"}}, allow_command=False)
+
+    def test_command_needs_the_config_switch(self) -> None:
+        data = {"kind": "command", "spec": {"argv": ["mpv", "--fs"]}}
+        with self.assertRaises(CommandNotAllowed):
+            validate_opener("video", data, allow_command=False)
+        self.assertEqual(validate_opener("video", data, allow_command=True), ("video", "command", {"argv": ["mpv", "--fs"]}))
+        # Une commande déjà enregistrée peut être « réenregistrée » telle quelle
+        current = OpenerEntry("video", "command", {"argv": ["mpv", "--fs"]})
+        self.assertEqual(validate_opener("video", data, allow_command=False, current=current)[1], "command")
+        with self.assertRaises(CommandNotAllowed):
+            validate_opener("video", {"kind": "command", "spec": {"argv": ["evil"]}}, allow_command=False, current=current)
+
+    def test_rejected_input(self) -> None:
+        with self.assertRaises(LauncherNotFound):
+            validate_opener("document", {"kind": "default"}, allow_command=True)
+        for data in (None, [], {}, {"kind": "web"}, {"kind": "command"}, {"kind": "command", "spec": {"argv": []}}):
+            with self.subTest(data=data), self.assertRaises(LauncherError):
+                validate_opener("audio", data, allow_command=True)
+
+
+class BuildOpenArgvTest(unittest.TestCase):
+    PATH = Path("/home/u/Musique/-weird name.mp3")
+
+    def test_default_uses_gio_open(self) -> None:
+        with mock.patch("mediadeck.launchers.shutil.which", return_value="/usr/bin/gio"):
+            self.assertEqual(build_open_argv(OpenerEntry("audio", "default", {}), self.PATH), ["gio", "open", str(self.PATH)])
+        with mock.patch("mediadeck.launchers.shutil.which", return_value=None), self.assertRaises(LauncherError):
+            build_open_argv(OpenerEntry("audio", "default", {}), self.PATH)
+
+    def test_app_uses_gio_launch_with_the_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            write_desktop(Path(tmp), "vlc.desktop", "vlc")
+            opener = OpenerEntry("video", "app", {"desktop_id": "vlc.desktop"})
+            with mock.patch("mediadeck.launchers.desktop_dirs", return_value=[Path(tmp)]), \
+                    mock.patch("mediadeck.launchers.shutil.which", return_value="/usr/bin/gio"):
+                self.assertEqual(build_open_argv(opener, self.PATH), ["gio", "launch", str(Path(tmp) / "vlc.desktop"), str(self.PATH)])
+            with mock.patch("mediadeck.launchers.desktop_dirs", return_value=[Path(tmp) / "vide"]), self.assertRaises(LauncherError):
+                build_open_argv(opener, self.PATH)
+
+    def test_command_gets_the_path_as_last_argument_without_a_shell(self) -> None:
+        opener = OpenerEntry("video", "command", {"argv": ["mpv", "--fs"]})
+        self.assertEqual(build_open_argv(opener, self.PATH), ["mpv", "--fs", str(self.PATH)])
+        tricky = Path("/home/u/V/$(reboot); rm -rf x.mkv")
+        self.assertEqual(build_open_argv(opener, tricky)[-1], str(tricky))
 
 
 class DesktopAppsTest(unittest.TestCase):

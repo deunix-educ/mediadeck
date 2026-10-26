@@ -9,7 +9,8 @@ from typing import Any
 from dbus_next.constants import BusType
 from dbus_next.aio.message_bus import MessageBus
 
-from .launchers import LauncherStore, build_argv
+from .launchers import LauncherStore, build_argv, build_open_argv
+from .media import MediaLibrary
 
 log = logging.getLogger(__name__)
 
@@ -23,10 +24,16 @@ _POWER_METHODS = {"suspend": "call_suspend", "reboot": "call_reboot", "poweroff"
 
 class SystemControl:
     def __init__(
-        self, session_bus: MessageBus, launchers: LauncherStore, enable_power: bool, admin_enabled: bool
+        self,
+        session_bus: MessageBus,
+        launchers: LauncherStore,
+        media: MediaLibrary,
+        enable_power: bool,
+        admin_enabled: bool,
     ) -> None:
         self._session_bus = session_bus
         self._launchers = launchers
+        self._media = media
         self._enable_power = enable_power
         self._admin_enabled = admin_enabled
         self._logind: Any = None
@@ -51,6 +58,7 @@ class SystemControl:
                 {"id": launcher.id, "label": launcher.label, "icon": launcher.icon}
                 for launcher in self._launchers.list()
             ],
+            "media": self._media.snapshot(),
         }
 
     async def execute(self, action: str, payload: dict[str, Any]) -> None:
@@ -61,6 +69,8 @@ class SystemControl:
                 await self._lock()
             case "launch":
                 await self._launch(payload.get("id"))
+            case "open_media":
+                await self._open_media(payload.get("root"), payload.get("path"))
             case _:
                 raise ValueError(f"unknown system action '{action}'")
 
@@ -85,6 +95,17 @@ class SystemControl:
             raise ValueError("unknown launcher")
         command = build_argv(launcher)
         log.info("launching %s: %s", launcher.id, command)
+        await self._spawn(command)
+
+    async def _open_media(self, root: Any, path: Any) -> None:
+        """Ouvre un fichier de l'onglet Médias avec le lecteur de son type ; le chemin est résolu côté serveur."""
+        file, media_type = await asyncio.to_thread(self._media.file, root, path)
+        opener = self._launchers.openers()[media_type]
+        command = build_open_argv(opener, file)
+        log.info("opening %s file with %s: %s", media_type, opener.kind, command)
+        await self._spawn(command)
+
+    async def _spawn(self, command: list[str]) -> None:
         # Session séparée : le programme survit à un redémarrage du service
         process = await asyncio.create_subprocess_exec(
             *command,

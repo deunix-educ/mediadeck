@@ -16,6 +16,7 @@ const MESSAGES = {
         "status.auth": "Jeton refusé ?",
         "action.fullscreen": "Plein écran",
         "tab.player": "Lecture",
+        "tab.media": "Médias",
         "tab.remote": "Pavé",
         "tab.launchers": "Lanceurs",
         "tab.system": "Système",
@@ -34,6 +35,22 @@ const MESSAGES = {
         "audio.mute": "Couper le son",
         "audio.outputs": "Sorties audio",
         "audio.default": "Par défaut",
+        "media.up": "Dossier parent",
+        "media.refresh": "Actualiser",
+        "media.path": "Chemin",
+        "media.filter": "Type de fichier",
+        "media.home": "Dossiers",
+        "media.all": "Tout",
+        "media.audio": "Sons",
+        "media.image": "Images",
+        "media.video": "Vidéos",
+        "media.loading": "Chargement…",
+        "media.empty": "Aucun fichier multimédia ici.",
+        "media.none_match": "Aucun fichier de ce type ici.",
+        "media.truncated": "Liste tronquée : seuls les premiers éléments sont affichés.",
+        "media.opening": "Ouverture : {name}",
+        "media.error": "Dossier illisible : {message}",
+        "media.denied": "Jeton refusé : rouvrez la télécommande avec son URL complète.",
         "remote.none": "Clavier et souris virtuels indisponibles",
         "remote.hint": "Glisser : déplacer · Toucher : clic · 2 doigts : défiler / clic droit",
         "text.open": "Clavier",
@@ -77,6 +94,7 @@ const MESSAGES = {
         "status.auth": "Token rejected?",
         "action.fullscreen": "Fullscreen",
         "tab.player": "Playing",
+        "tab.media": "Media",
         "tab.remote": "Touchpad",
         "tab.launchers": "Launchers",
         "tab.system": "System",
@@ -95,6 +113,22 @@ const MESSAGES = {
         "audio.mute": "Mute",
         "audio.outputs": "Audio outputs",
         "audio.default": "Default",
+        "media.up": "Parent folder",
+        "media.refresh": "Refresh",
+        "media.path": "Path",
+        "media.filter": "File type",
+        "media.home": "Folders",
+        "media.all": "All",
+        "media.audio": "Sounds",
+        "media.image": "Images",
+        "media.video": "Videos",
+        "media.loading": "Loading…",
+        "media.empty": "No media file here.",
+        "media.none_match": "No file of this type here.",
+        "media.truncated": "List truncated: only the first items are shown.",
+        "media.opening": "Opening: {name}",
+        "media.error": "Cannot read the folder: {message}",
+        "media.denied": "Token rejected: reopen the remote with its full URL.",
         "remote.none": "Virtual keyboard and mouse unavailable",
         "remote.hint": "Drag: move · Tap: click · 2 fingers: scroll / right click",
         "text.open": "Keyboard",
@@ -914,6 +948,259 @@ class SystemPanel {
 // Éléments transverses
 // ----------------------------------------------------------------------
 
+// ----------------------------------------------------------------------
+// Médias : fichiers son, image et vidéo des dossiers du PC
+// ----------------------------------------------------------------------
+
+class MediaPanel {
+    // Type d'entrée -> icône du sprite ; « dir » = sous-dossier
+    static ICONS = { dir: "folder", audio: "music", image: "image", video: "film" };
+    static FILTERS = ["all", "audio", "image", "video"];
+
+    constructor(connection, i18n, toast, tabs) {
+        this.connection = connection;
+        this.i18n = i18n;
+        this.toast = toast;
+        this.tabs = tabs;
+        this.tab = document.querySelector('[data-tab="media"]');
+        this.rootsKey = "";
+        this.roots = [];
+        this.root = null; // dossier racine affiché ; null = liste des dossiers
+        this.path = "";
+        this.listing = null;
+        this.status = "";
+        this.filter = "all";
+        this.loaded = false;
+        this.loadId = 0;
+
+        this.els = {
+            panel: $("panel-media"),
+            up: $("media-up"),
+            crumbs: $("media-crumbs"),
+            filters: $("media-filters"),
+            grid: $("media-grid"),
+            status: $("media-status"),
+        };
+        this.els.up.addEventListener("click", () => this.up());
+        $("media-refresh").addEventListener("click", () => this.load());
+        tabs.onSelect((name) => {
+            if (name === "media") {
+                this.show();
+            }
+        });
+        this.render();
+    }
+
+    get visible() {
+        return !this.els.panel.hidden;
+    }
+
+    update(system) {
+        const roots = system.media?.roots ?? [];
+        const key = JSON.stringify(roots);
+        if (key === this.rootsKey) {
+            return;
+        }
+        this.rootsKey = key;
+        this.roots = roots;
+        // Sans dossier configuré, l'onglet disparaît ; avec un seul dossier, on l'ouvre directement
+        this.tab.hidden = roots.length === 0;
+        if (roots.length === 0 && this.visible) {
+            this.tabs.select("player");
+        }
+        this.root = roots.length === 1 ? roots[0].id : null;
+        this.path = "";
+        this.listing = null;
+        this.loaded = false;
+        this.render();
+        if (this.visible) {
+            this.show();
+        }
+    }
+
+    show() {
+        if (!this.loaded) {
+            this.load();
+        }
+    }
+
+    // Charge le dossier courant (GET /api/media, jeton en en-tête)
+    async load() {
+        this.loaded = true;
+        if (this.root === null) {
+            this.listing = null;
+            this.status = "";
+            this.render();
+            return;
+        }
+        const id = ++this.loadId;
+        this.status = this.i18n.t("media.loading");
+        this.renderStatus();
+        let listing = null;
+        let status = "";
+        try {
+            const query = new URLSearchParams({ root: this.root, path: this.path });
+            const response = await fetch(`/api/media?${query}`, {
+                headers: { Authorization: `Bearer ${this.connection.token}` },
+                cache: "no-store",
+            });
+            const data = await response.json().catch(() => ({}));
+            if (response.status === 401) {
+                status = this.i18n.t("media.denied");
+            } else if (!response.ok) {
+                status = this.i18n.t("media.error", { message: data.error ?? response.statusText });
+            } else {
+                listing = data;
+            }
+        } catch {
+            status = this.i18n.t("status.offline");
+        }
+        if (id !== this.loadId) {
+            return; // une navigation plus récente a pris le relais
+        }
+        this.listing = listing;
+        this.status = status;
+        this.render();
+        this.els.panel.scrollTop = 0;
+    }
+
+    go(root, path) {
+        this.root = root;
+        this.path = path;
+        this.load();
+    }
+
+    up() {
+        if (this.root === null) {
+            return;
+        }
+        if (this.path !== "") {
+            this.go(this.root, this.path.split("/").slice(0, -1).join("/"));
+        } else if (this.roots.length > 1) {
+            this.go(null, "");
+        }
+    }
+
+    open(entry) {
+        const path = this.path === "" ? entry.name : `${this.path}/${entry.name}`;
+        this.connection.send({ domain: "system", action: "open_media", root: this.root, path });
+        this.toast.show(this.i18n.t("media.opening", { name: entry.name }));
+    }
+
+    render() {
+        this.renderBar();
+        this.renderGrid();
+        this.renderStatus();
+    }
+
+    renderBar() {
+        const atTop = this.root === null || (this.path === "" && this.roots.length <= 1);
+        this.els.up.disabled = atTop;
+
+        const crumbs = [];
+        const add = (label, action, current) => {
+            if (crumbs.length > 0) {
+                const separator = document.createElement("span");
+                separator.className = "crumb-sep";
+                separator.textContent = "›";
+                crumbs.push(separator);
+            }
+            const crumb = document.createElement("button");
+            crumb.type = "button";
+            crumb.className = "crumb" + (current ? " current" : "");
+            crumb.textContent = label;
+            crumb.addEventListener("click", action);
+            crumbs.push(crumb);
+        };
+        const segments = this.path === "" ? [] : this.path.split("/");
+        if (this.roots.length > 1) {
+            add(this.i18n.t("media.home"), () => this.go(null, ""), this.root === null);
+        }
+        if (this.root !== null) {
+            const root = this.roots.find((candidate) => candidate.id === this.root);
+            add(root?.name ?? this.root, () => this.go(this.root, ""), segments.length === 0);
+            segments.forEach((segment, index) => {
+                const target = segments.slice(0, index + 1).join("/");
+                add(segment, () => this.go(this.root, target), index === segments.length - 1);
+            });
+        }
+        this.els.crumbs.replaceChildren(...crumbs);
+        this.els.crumbs.scrollLeft = this.els.crumbs.scrollWidth;
+
+        this.els.filters.hidden = this.root === null;
+        this.els.filters.replaceChildren(
+            ...MediaPanel.FILTERS.map((name) => {
+                const chip = document.createElement("button");
+                chip.type = "button";
+                chip.className = "chip" + (name === this.filter ? " active" : "");
+                chip.textContent = this.i18n.t(`media.${name}`);
+                chip.addEventListener("click", () => {
+                    this.filter = name;
+                    this.render();
+                });
+                return chip;
+            }),
+        );
+    }
+
+    tile(kind, name, onClick) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "media-tile";
+        button.dataset.kind = kind;
+        button.innerHTML = `<svg><use href="#i-${MediaPanel.ICONS[kind]}"/></svg>`;
+        const label = document.createElement("span");
+        label.textContent = name;
+        button.append(label);
+        button.addEventListener("click", () => onClick(button));
+        return button;
+    }
+
+    renderGrid() {
+        if (this.root === null) {
+            this.els.grid.replaceChildren(
+                ...this.roots.map((root) => this.tile("dir", root.name, () => this.go(root.id, ""))),
+            );
+            return;
+        }
+        const entries = (this.listing?.entries ?? []).filter(
+            (entry) => entry.kind === "dir" || this.filter === "all" || entry.kind === this.filter,
+        );
+        this.els.grid.replaceChildren(
+            ...entries.map((entry) =>
+                this.tile(entry.kind, entry.name, (button) => {
+                    if (entry.kind === "dir") {
+                        this.go(this.root, this.path === "" ? entry.name : `${this.path}/${entry.name}`);
+                        return;
+                    }
+                    this.open(entry);
+                    button.classList.add("opened");
+                    setTimeout(() => button.classList.remove("opened"), 1500);
+                }),
+            ),
+        );
+    }
+
+    renderStatus() {
+        let message = this.status;
+        if (message === "" && this.root !== null && this.listing) {
+            const entries = this.listing.entries;
+            const files = entries.filter((entry) => entry.kind !== "dir");
+            const matching = files.filter((entry) => this.filter === "all" || entry.kind === this.filter);
+            if (entries.length === 0) {
+                message = this.i18n.t("media.empty");
+            } else if (files.length > 0 && matching.length === 0) {
+                // Des fichiers existent mais le filtre les masque (sous-dossiers éventuellement visibles)
+                message = this.i18n.t("media.none_match");
+            } else if (this.listing.truncated) {
+                message = this.i18n.t("media.truncated");
+            }
+        }
+        this.els.status.textContent = message;
+        this.els.status.hidden = message === "";
+    }
+}
+
 class Toast {
     constructor(element) {
         this.element = element;
@@ -933,11 +1220,16 @@ class Toast {
 
 class Tabs {
     constructor() {
+        this.listeners = [];
         this.buttons = [...document.querySelectorAll("#tabbar [data-tab]")];
         this.buttons.forEach((button) => {
             button.addEventListener("click", () => this.select(button.dataset.tab));
         });
         this.select(Storage.get(STORAGE_TAB) || "player");
+    }
+
+    onSelect(listener) {
+        this.listeners.push(listener);
     }
 
     select(name) {
@@ -949,6 +1241,7 @@ class Tabs {
             panel.hidden = panel.dataset.panel !== name;
         });
         Storage.set(STORAGE_TAB, name);
+        this.listeners.forEach((listener) => listener(name));
     }
 }
 
@@ -1001,6 +1294,7 @@ class App {
         this.remote = new RemotePanel(this.connection);
         this.text = new TextPanel(this.connection, this.i18n, this.toast);
         this.launchers = new LauncherPanel(this.connection, this.i18n, this.toast);
+        this.media = new MediaPanel(this.connection, this.i18n, this.toast, this.tabs);
         this.system = new SystemPanel(this.connection, this.i18n);
 
         this.bindTopbar();
@@ -1011,6 +1305,7 @@ class App {
         this.connection.addEventListener("status", (event) => this.onStatus(event.detail));
         this.i18n.onChange(() => {
             this.updateLangButton();
+            this.media.render();
             if (this.lastState) {
                 this.launchers.key = "";
                 this.onState(this.lastState);
@@ -1062,6 +1357,7 @@ class App {
         this.remote.update(state.input);
         this.text.update(state.input);
         this.launchers.update(state.system);
+        this.media.update(state.system);
         this.system.update(state.system);
     }
 }

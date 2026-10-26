@@ -11,6 +11,7 @@ Le PC exécute un petit pont Python ; la tablette n'a besoin que d'un navigateur
 |---|---|---|
 | **Lecture** | Pochette, titre, progression, lecture/pause, suivant/précédent, aléatoire, répétition, volume du lecteur, choix du lecteur | MPRIS (D-Bus de session) : Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
 | | **Barre de volume** sous le lecteur : volume principal, sourdine ; le bouton de la sortie active ouvre une fenêtre avec le choix de la sortie (HDMI, Bluetooth…) et le volume par sortie ; la barre reste toujours visible | `pactl` (PipeWire ou PulseAudio) |
+| **Médias** | Fichiers son, image et vidéo des dossiers du PC, sous forme d'icônes ; un appui ouvre le fichier **sur le PC** avec le lecteur choisi pour son type | `gio` ; dossiers et lecteurs : voir « Médias » |
 | **Pavé** | Pavé tactile (clic, clic droit, défilement 2 doigts), croix directionnelle, Échap, Espace, F, F11…, saisie de texte avec le clavier de la tablette | `/dev/uinput` : fonctionne sous X11 **et** Wayland |
 | **Lanceurs** | Boutons configurables : sites web et applications installées (page `/admin`) | navigateur, `gio launch` |
 | **Système** | Verrouillage, veille, redémarrage, extinction (appui long 1 s) : opérations délicates, séparées des lanceurs | logind, `org.freedesktop.ScreenSaver` |
@@ -28,6 +29,7 @@ mediadeck (aiohttp, service systemd --user)
    ├─ audio.py   → pactl list/set-sink-*, subscribe
    ├─ input.py   → python-evdev / uinput             (clavier + pointeur virtuels)
    ├─ keymap.py / text.py → saisie de texte selon la disposition réelle du clavier (libxkbcommon)
+   ├─ media.py   → onglet Médias : dossiers autorisés, parcours sûr, API /api/media
    └─ system.py  → org.freedesktop.login1, ScreenSaver, lanceurs (base SQLite, page /admin)
 ```
 
@@ -76,6 +78,9 @@ text_input = false       # clavier virtuel : voir « Saisie de texte » avant d'
 enabled = true                 # page /admin et API des lanceurs
 allow_custom_command = false   # true : autoriser les commandes brutes depuis /admin
 
+[media]
+roots = ["~/Musique", "~/Vidéos", "~/Images"]   # absent : dossiers Musique/Vidéos/Images de l'utilisateur ; [] : onglet désactivé
+
 # Importés une seule fois dans la base au premier démarrage, puis gérés sur /admin
 [[launchers]]
 id = "youtube"
@@ -106,6 +111,32 @@ les lanceurs. Les changements apparaissent aussitôt sur la tablette.
 - `enabled = false` désactive la page et l'API ; les lanceurs existants continuent de fonctionner.
 - Le plein écran automatique n'existe pas avec Firefox, dont le mode kiosque ignore F11.
 - `gio` (paquet `libglib2.0-bin`, installé par `make deps`) lance les applications installées.
+
+## Médias
+
+L'onglet **Médias** (affiché dès qu'au moins un dossier est configuré) liste les fichiers **son**, **image** et
+**vidéo** sous forme d'icônes : sous-dossiers, fil d'Ariane, bouton retour, filtre Tout / Sons / Images / Vidéos.
+Un appui sur un fichier l'**ouvre sur le PC** ; la tablette reste une télécommande.
+
+- **Dossiers** : `[media] roots` dans `config.toml` (chemins absolus ou `~/…`). Sans cette clé, ce sont les dossiers
+  Musique, Vidéos et Images de l'utilisateur (lus dans `~/.config/user-dirs.dirs`, jamais tout le dossier personnel).
+  `roots = []` désactive l'onglet. Un seul dossier est ouvert directement ; plusieurs apparaissent en premier niveau.
+- **Un lanceur spécial par type** (Son, Image, Vidéo) : le **chemin du fichier est ajouté en dernier argument**. Ils se
+  règlent sur la page `/admin`, section « Lecteurs de fichiers multimédias », avec les mêmes règles que les lanceurs :
+
+  | Lecteur | Commande exécutée | Ce que le client peut écrire |
+  |---|---|---|
+  | **Application par défaut du système** (réglage initial) | `gio open <fichier>` | rien |
+  | **Application installée** | `gio launch <appli>.desktop <fichier>` | rien (choix dans une liste) |
+  | **Commande** (ex. `mpv --fs`) | `mpv --fs <fichier>` | tout : réservé à `allow_custom_command = true` |
+
+- **Sécurité** : le client n'envoie jamais de chemin absolu, seulement un dossier racine et un chemin relatif. Le
+  serveur refuse `..`, les chemins absolus, les entrées cachées (`.x`) et tout ce que les liens symboliques
+  feraient sortir de la racine. Seules les extensions de médias connues sont listées et ouvertes (jamais un script,
+  même renommé en `.mp3` ou lié vers un `.sh`). L'API `GET /api/media` exige le jeton en en-tête `Authorization`.
+  Un dossier contient au plus 1000 entrées affichées. Le jeton donne accès aux **noms** des fichiers de ces dossiers :
+  ne configurer que ce qui peut être vu depuis la tablette.
+- Pas de miniatures : une icône par type, comme dans l'onglet Lanceurs.
 
 ## Saisie de texte
 
@@ -216,6 +247,7 @@ avertissement de certificat depuis le port HTTP.
 
 ## Sécurité
 
+- `/api/media` (liste des fichiers) exige le jeton en en-tête ; l'ouverture d'un fichier passe par le WebSocket, avec un dossier racine et un chemin relatif validés côté serveur (voir « Médias »).
 - `/ws` et `/art` exigent le jeton (comparaison à temps constant) ; la page HTML seule est publique.
 - Le fichier de configuration est refusé s'il est lisible par le groupe ou les autres.
 - `/art` ne sert que la pochette `file://` du lecteur demandé, et uniquement des images de moins de 10 Mo.
@@ -225,6 +257,8 @@ avertissement de certificat depuis le port HTTP.
 - Sans `make cert`, ou sur le port `http_port`, le trafic est en HTTP clair (jeton compris) : réservé au LAN de confiance. Avec HTTPS, il est chiffré, mais le port ne doit toujours pas être exposé hors du LAN : pour un accès distant, passer par WireGuard. `http_port` est désactivé par défaut.
 
 ## Limites connues
+
+- **Ancienne interface après une mise à jour** : si la tablette affiche encore l'ancienne version (onglets manquants…), actualiser la page **une fois** (menu du navigateur → Actualiser). Ouvrir le même lien ou le raccourci de l'écran d'accueil réutilise la page gardée en cache ; l'actualisation la remplace, et les fichiers de l'interface sont ensuite versionnés (`/static/<version>/…`), donc plus jamais périmés. Penser aussi à **redémarrer le serveur** après une mise à jour : le Python en cours d'exécution n'est pas rechargé.
 
 - **Écran toujours allumé** : l'API Wake Lock exige HTTPS (voir « HTTPS local »). En HTTP, régler la mise en veille de la tablette, ou utiliser un navigateur kiosque (Fully Kiosk Browser…).
 - **VPN sur la tablette** : un VPN actif sur l'appareil client coupe l'accès au réseau local, et la page expire (« site inaccessible, trop de temps à répondre »). Autoriser les connexions LAN dans l'application VPN (Proton VPN : Paramètres → Connexion → Paramètres avancés → Connexions LAN), désactiver le « verrouillage » / kill switch d'Android, ou couper le VPN.

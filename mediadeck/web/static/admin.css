@@ -84,6 +84,14 @@ body.admin {
     gap: 8px;
 }
 
+.openers {
+    margin-top: 40px;
+}
+
+.openers .section-title {
+    margin-top: 0;
+}
+
 .chip.danger {
     color: var(--danger);
 }

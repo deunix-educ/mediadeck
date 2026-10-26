@@ -5,6 +5,11 @@ Trois types de lanceurs, du plus sûr au plus ouvert :
 - ``app``     : application installée, désignée par son fichier .desktop (lancée via ``gio launch``) ;
 - ``command`` : liste argv brute, réservée à la configuration (``admin.allow_custom_command``).
 Le client n'écrit donc jamais de commande, sauf autorisation explicite dans le fichier de configuration.
+
+Trois lanceurs spéciaux, un par type de média (``audio``, ``image``, ``video``), ouvrent les fichiers de l'onglet
+Médias : le chemin du fichier est ajouté en dernier argument. Ils obéissent aux mêmes règles : ``default``
+(application par défaut du système, ``gio open``), ``app`` (fichier .desktop) ou ``command`` (réservée à la
+configuration). Le chemin ne vient jamais du client tel quel : il est résolu par ``media.MediaLibrary``.
 """
 
 from __future__ import annotations
@@ -32,6 +37,8 @@ DB_PATH = DATA_DIR / "launchers.db"
 # Icônes du sprite de l'interface (index.html)
 ICONS = ("app", "tv", "film", "globe", "music", "screen-off", "speaker", "lock", "window")
 KINDS = ("web", "app", "command")
+MEDIA_TYPES = ("audio", "image", "video")
+OPENER_KINDS = ("default", "app", "command")
 
 MAX_LAUNCHERS = 64
 MAX_LABEL = 40
@@ -230,6 +237,56 @@ def validate(
     return label.strip(), icon, kind, spec
 
 
+@dataclass(frozen=True)
+class OpenerEntry:
+    """Lanceur spécial d'un type de média : ouvre un fichier dont le chemin est ajouté à la commande."""
+
+    type: str
+    kind: str
+    spec: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"type": self.type, "kind": self.kind, "spec": self.spec}
+
+
+def validate_opener(
+    media_type: Any, data: Any, *, allow_command: bool, current: OpenerEntry | None = None
+) -> tuple[str, str, dict[str, Any]]:
+    """Valide la définition du lecteur d'un type de média ; renvoie (type, kind, spec) normalisés."""
+    if not isinstance(media_type, str) or media_type not in MEDIA_TYPES:
+        raise LauncherNotFound(f"media type must be one of: {', '.join(MEDIA_TYPES)}")
+    if not isinstance(data, dict):
+        raise LauncherError("body must be a JSON object")
+    kind = data.get("kind")
+    if not isinstance(kind, str) or kind not in OPENER_KINDS:
+        raise LauncherError(f"kind must be one of: {', '.join(OPENER_KINDS)}")
+    spec = {} if kind == "default" else _validate_spec(kind, data.get("spec"))
+    unchanged = current is not None and current.kind == "command" and current.spec == spec
+    if kind == "command" and not allow_command and not unchanged:
+        raise CommandNotAllowed("custom commands are disabled (admin.allow_custom_command in config.toml)")
+    return media_type, kind, spec
+
+
+def build_open_argv(opener: OpenerEntry, path: Path) -> list[str]:
+    """Commande qui ouvre ``path`` (chemin absolu déjà résolu : il ne peut pas être pris pour une option)."""
+    match opener.kind:
+        case "default":
+            if shutil.which("gio") is None:
+                raise LauncherError("gio not found (apt install libglib2.0-bin)")
+            return ["gio", "open", str(path)]
+        case "app":
+            entry = find_desktop_entry(opener.spec.get("desktop_id", ""))
+            if entry is None:
+                raise LauncherError(f"application not found: {opener.spec.get('desktop_id')}")
+            if shutil.which("gio") is None:
+                raise LauncherError("gio not found (apt install libglib2.0-bin)")
+            return ["gio", "launch", str(entry), str(path)]
+        case "command":
+            return [*opener.spec["argv"], str(path)]
+        case _:
+            raise LauncherError(f"unknown opener kind '{opener.kind}'")
+
+
 def build_argv(entry: LauncherEntry) -> list[str]:
     """Commande à exécuter (liste argv, jamais de shell)."""
     match entry.kind:
@@ -266,6 +323,11 @@ CREATE TABLE IF NOT EXISTS launchers (
     spec TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS media_openers (
+    type TEXT PRIMARY KEY CHECK (type IN ('audio', 'image', 'video')),
+    kind TEXT NOT NULL CHECK (kind IN ('default', 'app', 'command')),
+    spec TEXT NOT NULL
+);
 """
 
 
@@ -340,6 +402,25 @@ class LauncherStore:
         with self._db:
             self._db.executemany("UPDATE launchers SET position = ? WHERE id = ?", list(enumerate(ids)))
         self._cache = None
+
+    def openers(self) -> dict[str, OpenerEntry]:
+        """Lecteur de chaque type de média ; l'application par défaut du système tant qu'aucun n'est choisi."""
+        found = {row[0]: row for row in self._db.execute("SELECT type, kind, spec FROM media_openers")}
+        return {
+            media_type: OpenerEntry(media_type, found[media_type][1], json.loads(found[media_type][2]))
+            if media_type in found
+            else OpenerEntry(media_type, "default", {})
+            for media_type in MEDIA_TYPES
+        }
+
+    def set_opener(self, media_type: str, kind: str, spec: dict[str, Any]) -> OpenerEntry:
+        with self._db:
+            self._db.execute(
+                "INSERT INTO media_openers (type, kind, spec) VALUES (?, ?, ?) "
+                "ON CONFLICT (type) DO UPDATE SET kind = excluded.kind, spec = excluded.spec",
+                (media_type, kind, json.dumps(spec)),
+            )
+        return OpenerEntry(media_type, kind, spec)
 
     def seed(self, launchers: Iterable[ConfigLauncher]) -> int:
         """Importe une seule fois les [[launchers]] du fichier de configuration ; renvoie le nombre importé."""

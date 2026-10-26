@@ -1,12 +1,10 @@
-"""API REST d'administration des lanceurs (page /admin).
+"""API REST d'administration des lanceurs et des lecteurs de fichiers multimédias (page /admin).
 
-Authentification par ``Authorization: Bearer <jeton>`` : contrairement à un paramètre d'URL, un en-tête
-personnalisé ne peut pas être ajouté par un site tiers (pas de CORS), ce qui exclut le CSRF.
+Authentification par ``Authorization: Bearer <jeton>`` (voir restapi.py).
 """
 
 from __future__ import annotations
 
-import hmac
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -19,13 +17,16 @@ from .launchers import (
     BROWSERS,
     ICONS,
     KINDS,
+    OPENER_KINDS,
     CommandNotAllowed,
     LauncherError,
     LauncherNotFound,
     LauncherStore,
     list_desktop_apps,
     validate,
+    validate_opener,
 )
+from .restapi import bearer_authorized, error_response, json_response
 
 log = logging.getLogger(__name__)
 
@@ -34,28 +35,20 @@ MAX_BODY_BYTES = 16 * 1024
 Handler = Callable[["AdminApi", web.Request], Awaitable[web.StreamResponse]]
 
 
-def _json(data: Any, status: int = 200) -> web.Response:
-    return web.json_response(data, status=status, headers={"Cache-Control": "no-store"})
-
-
-def _error(status: int, message: str) -> web.Response:
-    return _json({"error": message}, status)
-
-
 def _api(handler: Handler) -> Callable[["AdminApi", web.Request], Awaitable[web.StreamResponse]]:
     """Décorateur : authentification puis traduction des erreurs métier en réponses JSON."""
 
     async def wrapper(self: AdminApi, request: web.Request) -> web.StreamResponse:
         if not self.authorized(request):
-            return _error(401, "invalid or missing token")
+            return error_response(401, "invalid or missing token")
         try:
             return await handler(self, request)
         except CommandNotAllowed as exc:
-            return _error(403, str(exc))
+            return error_response(403, str(exc))
         except LauncherNotFound as exc:
-            return _error(404, str(exc))
+            return error_response(404, str(exc))
         except LauncherError as exc:
-            return _error(400, str(exc))
+            return error_response(400, str(exc))
 
     return wrapper
 
@@ -73,13 +66,11 @@ class AdminApi:
         app.router.add_put("/api/launchers/{id}", self.update)
         app.router.add_delete("/api/launchers/{id}", self.delete)
         app.router.add_get("/api/apps", self.apps)
+        app.router.add_get("/api/media/openers", self.list_openers)
+        app.router.add_put("/api/media/openers/{type}", self.set_opener)
 
     def authorized(self, request: web.Request) -> bool:
-        header = request.headers.get("Authorization", "")
-        scheme, _, token = header.partition(" ")
-        if scheme.lower() != "bearer":
-            return False
-        return hmac.compare_digest(token.strip().encode(), self._config.token.encode())
+        return bearer_authorized(request, self._config.token)
 
     @staticmethod
     async def _body(request: web.Request) -> Any:
@@ -96,7 +87,7 @@ class AdminApi:
 
     @_api
     async def list_launchers(self, _request: web.Request) -> web.StreamResponse:
-        return _json(
+        return json_response(
             {
                 "launchers": [entry.to_dict() for entry in self._store.list()],
                 "icons": list(ICONS),
@@ -116,7 +107,30 @@ class AdminApi:
 
     @_api
     async def apps(self, _request: web.Request) -> web.StreamResponse:
-        return _json([{"id": app.id, "name": app.name} for app in list_desktop_apps()])
+        return json_response([{"id": app.id, "name": app.name} for app in list_desktop_apps()])
+
+    @_api
+    async def list_openers(self, _request: web.Request) -> web.StreamResponse:
+        return json_response(
+            {
+                "openers": [entry.to_dict() for entry in self._store.openers().values()],
+                "kinds": list(OPENER_KINDS),
+                "allow_command": self._config.allow_custom_command,
+            }
+        )
+
+    @_api
+    async def set_opener(self, request: web.Request) -> web.StreamResponse:
+        media_type = request.match_info["type"]
+        media_type, kind, spec = validate_opener(
+            media_type,
+            await self._body(request),
+            allow_command=self._config.allow_custom_command,
+            current=self._store.openers().get(media_type),
+        )
+        entry = self._store.set_opener(media_type, kind, spec)
+        log.info("media opener set: %s (%s)", entry.type, entry.kind)
+        return json_response(entry.to_dict())
 
     @_api
     async def create(self, request: web.Request) -> web.StreamResponse:
@@ -126,7 +140,7 @@ class AdminApi:
         entry = self._store.create(label, icon, kind, spec)
         log.info("launcher created: %s (%s)", entry.id, entry.kind)
         self._changed()
-        return _json(entry.to_dict(), 201)
+        return json_response(entry.to_dict(), 201)
 
     @_api
     async def update(self, request: web.Request) -> web.StreamResponse:
@@ -139,7 +153,7 @@ class AdminApi:
         entry = self._store.update(current.id, label, icon, kind, spec)
         log.info("launcher updated: %s (%s)", entry.id, entry.kind)
         self._changed()
-        return _json(entry.to_dict())
+        return json_response(entry.to_dict())
 
     @_api
     async def delete(self, request: web.Request) -> web.StreamResponse:

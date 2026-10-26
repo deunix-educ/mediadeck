@@ -143,6 +143,58 @@ class AdminApiTest(AdminApiCase):
                 self.assertEqual(unknown.status, 400)
 
 
+class OpenersApiTest(AdminApiCase):
+    async def test_token_required(self) -> None:
+        for method, path in (("GET", "/api/media/openers"), ("PUT", "/api/media/openers/audio")):
+            for headers in ({}, {"Authorization": "Bearer nope"}, {"Authorization": TOKEN}):
+                response = await self.client.request(method, path, headers=headers, json={"kind": "default"})
+                self.assertEqual(response.status, 401, (method, headers))
+
+    async def test_list_defaults_to_the_system_application(self) -> None:
+        data = await (await self.client.get("/api/media/openers", headers=AUTH)).json()
+        self.assertEqual([opener["type"] for opener in data["openers"]], ["audio", "image", "video"])
+        self.assertTrue(all(opener["kind"] == "default" for opener in data["openers"]))
+        self.assertEqual(data["kinds"], ["default", "app", "command"])
+        self.assertFalse(data["allow_command"])
+
+    async def test_set_and_read_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "vlc.desktop").write_text("[Desktop Entry]\nType=Application\nName=VLC\nExec=vlc\n")
+            with mock.patch("mediadeck.launchers.desktop_dirs", return_value=[Path(tmp)]):
+                response = await self.client.put(
+                    "/api/media/openers/video", headers=AUTH, json={"kind": "app", "spec": {"desktop_id": "vlc.desktop"}}
+                )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(await response.json(), {"type": "video", "kind": "app", "spec": {"desktop_id": "vlc.desktop"}})
+        data = await (await self.client.get("/api/media/openers", headers=AUTH)).json()
+        self.assertEqual({o["type"]: o["kind"] for o in data["openers"]}, {"audio": "default", "image": "default", "video": "app"})
+        back = await self.client.put("/api/media/openers/video", headers=AUTH, json={"kind": "default"})
+        self.assertEqual((await back.json())["kind"], "default")
+
+    async def test_errors(self) -> None:
+        unknown_type = await self.client.put("/api/media/openers/document", headers=AUTH, json={"kind": "default"})
+        self.assertEqual(unknown_type.status, 404)
+        for body in ({"kind": "web"}, {"kind": "app", "spec": {"desktop_id": "nope.desktop"}}, {}):
+            response = await self.client.put("/api/media/openers/audio", headers=AUTH, json=body)
+            self.assertEqual(response.status, 400, body)
+        forbidden = await self.client.put(
+            "/api/media/openers/audio", headers=AUTH, json={"kind": "command", "spec": {"argv": ["mpv"]}}
+        )
+        self.assertEqual(forbidden.status, 403)
+        self.assertTrue(all(opener.kind == "default" for opener in self.store.openers().values()))
+
+
+class OpenersApiCommandAllowedTest(AdminApiCase):
+    allow_command = True
+
+    async def test_command_opener(self) -> None:
+        response = await self.client.put(
+            "/api/media/openers/video", headers=AUTH, json={"kind": "command", "spec": {"argv": ["mpv", "--fs"]}}
+        )
+        self.assertEqual(response.status, 200)
+        self.assertEqual(self.store.openers()["video"].spec, {"argv": ["mpv", "--fs"]})
+
+
 class AdminApiCommandAllowedTest(AdminApiCase):
     allow_command = True
 

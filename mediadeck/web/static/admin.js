@@ -42,6 +42,18 @@ const MESSAGES = {
         "kind.web": "Site web",
         "kind.app": "Application installée",
         "kind.command": "Commande (avancé)",
+        "kind.default": "Application par défaut du système",
+        "openers.title": "Lecteurs de fichiers multimédias",
+        "openers.help": "Dans l'onglet Médias, un appui sur un fichier l'ouvre sur le PC avec le lecteur choisi ici pour son type. Le chemin du fichier est ajouté à la commande.",
+        "openers.edit_title": "Lecteur : {type}",
+        "openers.default_help": "Le fichier est ouvert avec l'application que le système associe à son format.",
+        "openers.command_help": "Le chemin du fichier est ajouté en dernier argument. Pas de shell : chaque ligne est un argument, sans guillemets.",
+        "openers.command_locked": "Commandes brutes désactivées : le lecteur ne peut être changé que par une application installée. Pour les autoriser, définir allow_custom_command = true dans la section [admin] de config.toml.",
+        "openers.default_summary": "Application par défaut du système",
+        "openers.tag_default": "Par défaut",
+        "media.type.audio": "Son",
+        "media.type.image": "Image",
+        "media.type.video": "Vidéo",
         "icon.app": "Application",
         "icon.tv": "Télévision",
         "icon.film": "Film",
@@ -90,6 +102,18 @@ const MESSAGES = {
         "kind.web": "Website",
         "kind.app": "Installed application",
         "kind.command": "Command (advanced)",
+        "kind.default": "System default application",
+        "openers.title": "Media file players",
+        "openers.help": "In the Media tab, tapping a file opens it on the PC with the player chosen here for its type. The file path is added to the command.",
+        "openers.edit_title": "Player: {type}",
+        "openers.default_help": "The file is opened with the application the system associates with its format.",
+        "openers.command_help": "The file path is added as the last argument. No shell: each line is one argument, without quotes.",
+        "openers.command_locked": "Raw commands are disabled: the player can only be an installed application. To allow them, set allow_custom_command = true in the [admin] section of config.toml.",
+        "openers.default_summary": "System default application",
+        "openers.tag_default": "Default",
+        "media.type.audio": "Sound",
+        "media.type.image": "Image",
+        "media.type.video": "Video",
         "icon.app": "Application",
         "icon.tv": "Television",
         "icon.film": "Film",
@@ -151,8 +175,21 @@ class Api {
         return this.request("GET", "/api/launchers");
     }
 
+    // Liste mise en cache : les deux formulaires la partagent (réessayée si la requête échoue)
     apps() {
-        return this.request("GET", "/api/apps");
+        this.appsRequest ??= this.request("GET", "/api/apps").catch((error) => {
+            this.appsRequest = null;
+            throw error;
+        });
+        return this.appsRequest;
+    }
+
+    openers() {
+        return this.request("GET", "/api/media/openers");
+    }
+
+    setOpener(type, opener) {
+        return this.request("PUT", `/api/media/openers/${encodeURIComponent(type)}`, opener);
     }
 
     create(entry) {
@@ -192,6 +229,68 @@ function button(className, text, onClick) {
     element.textContent = text;
     element.addEventListener("click", onClick);
     return element;
+}
+
+// ----------------------------------------------------------------------
+// Sélecteur d'application installée (liste filtrable), partagé par les deux formulaires
+// ----------------------------------------------------------------------
+
+class AppPicker {
+    // ids : { select, filter, empty } ; onError(message) affiche une erreur dans le formulaire
+    constructor(i18n, api, ids, onError) {
+        this.i18n = i18n;
+        this.api = api;
+        this.onError = onError;
+        this.select = $(ids.select);
+        this.filter = $(ids.filter);
+        this.empty = $(ids.empty);
+        this.apps = null;
+        this.selected = null;
+        this.filter.addEventListener("input", () => this.render());
+    }
+
+    // Prépare une nouvelle ouverture du formulaire (application déjà choisie, filtre vidé)
+    reset(selected) {
+        this.selected = selected;
+        this.filter.value = "";
+        this.select.replaceChildren();
+    }
+
+    get value() {
+        return this.select.value;
+    }
+
+    async load() {
+        if (this.apps === null) {
+            try {
+                this.apps = await this.api.apps();
+            } catch (error) {
+                this.onError(describeError(this.i18n, error));
+                return;
+            }
+        }
+        this.render();
+    }
+
+    render() {
+        if (this.apps === null) {
+            return;
+        }
+        const current = this.select.value || this.selected;
+        const filter = this.filter.value.trim().toLocaleLowerCase();
+        const options = this.apps
+            .filter((app) => app.name.toLocaleLowerCase().includes(filter) || app.id.toLocaleLowerCase().includes(filter))
+            .map((app) => new Option(app.name, app.id));
+        // Application enregistrée mais désinstallée depuis : on la montre au lieu de la perdre en silence
+        if (this.selected && !this.apps.some((app) => app.id === this.selected)) {
+            options.unshift(new Option(this.i18n.t("form.app_missing", { id: this.selected }), this.selected));
+        }
+        this.select.replaceChildren(...options);
+        this.empty.hidden = options.length > 0;
+        if (options.some((option) => option.value === current)) {
+            this.select.value = current;
+        }
+    }
 }
 
 // ----------------------------------------------------------------------
@@ -278,8 +377,13 @@ class LauncherForm {
         this.onSaved = onSaved;
         this.meta = null;
         this.editing = null;
-        this.apps = null;
         this.dialog = $("launcher-dialog");
+        this.picker = new AppPicker(
+            i18n,
+            api,
+            { select: "form-app", filter: "form-app-filter", empty: "form-apps-empty" },
+            (message) => this.setError(message),
+        );
 
         $("launcher-form").addEventListener("submit", (event) => {
             event.preventDefault();
@@ -288,7 +392,6 @@ class LauncherForm {
         $("form-cancel").addEventListener("click", () => this.dialog.close());
         $("form-kind").addEventListener("change", () => this.showGroup());
         $("form-browser").addEventListener("change", () => this.updateFullscreen());
-        $("form-app-filter").addEventListener("input", () => this.renderApps());
         i18n.onChange(() => {
             if (this.meta) {
                 this.populate();
@@ -349,8 +452,7 @@ class LauncherForm {
         $("form-browser").value = spec.browser ?? firstInstalled?.id ?? this.meta.browsers[0].id;
         $("form-fullscreen").checked = Boolean(spec.fullscreen);
         $("form-command").value = (spec.argv ?? []).join("\n");
-        $("form-app-filter").value = "";
-        this.selectedApp = spec.desktop_id ?? null;
+        this.picker.reset(spec.desktop_id ?? null);
 
         const locked = entry?.kind === "command" && !this.meta.allow_command;
         $("form-command").disabled = locked;
@@ -369,7 +471,7 @@ class LauncherForm {
             group.hidden = group.dataset.group !== kind;
         });
         if (kind === "app") {
-            this.loadApps();
+            this.picker.load();
         }
     }
 
@@ -381,39 +483,6 @@ class LauncherForm {
             $("form-fullscreen").checked = false;
         }
         $("form-fullscreen-hint").hidden = supported;
-    }
-
-    async loadApps() {
-        if (this.apps === null) {
-            try {
-                this.apps = await this.api.apps();
-            } catch (error) {
-                this.setError(describeError(this.i18n, error));
-                return;
-            }
-        }
-        this.renderApps();
-    }
-
-    renderApps() {
-        if (this.apps === null) {
-            return;
-        }
-        const select = $("form-app");
-        const current = select.value || this.selectedApp;
-        const filter = $("form-app-filter").value.trim().toLocaleLowerCase();
-        const options = this.apps
-            .filter((app) => app.name.toLocaleLowerCase().includes(filter) || app.id.toLocaleLowerCase().includes(filter))
-            .map((app) => new Option(app.name, app.id));
-        // Application enregistrée mais désinstallée depuis : on la montre au lieu de la perdre en silence
-        if (this.selectedApp && !this.apps.some((app) => app.id === this.selectedApp)) {
-            options.unshift(new Option(this.i18n.t("form.app_missing", { id: this.selectedApp }), this.selectedApp));
-        }
-        select.replaceChildren(...options);
-        $("form-apps-empty").hidden = options.length > 0;
-        if (options.some((option) => option.value === current)) {
-            select.value = current;
-        }
     }
 
     setError(message) {
@@ -436,7 +505,7 @@ class LauncherForm {
                 fullscreen: $("form-fullscreen").checked,
             };
         } else if (kind === "app") {
-            spec = { desktop_id: $("form-app").value };
+            spec = { desktop_id: this.picker.value };
         } else {
             spec = { argv: LauncherForm.parseArgv($("form-command").value) };
         }
@@ -461,6 +530,151 @@ class LauncherForm {
 }
 
 // ----------------------------------------------------------------------
+// Lecteurs de fichiers multimédias (un par type : son, image, vidéo)
+// ----------------------------------------------------------------------
+
+class OpenerList {
+    // onEdit(opener)
+    constructor(i18n, onEdit) {
+        this.i18n = i18n;
+        this.onEdit = onEdit;
+    }
+
+    summary(opener) {
+        switch (opener.kind) {
+            case "app":
+                return opener.spec.desktop_id;
+            case "command":
+                return opener.spec.argv.join(" ");
+            default:
+                return this.i18n.t("openers.default_summary");
+        }
+    }
+
+    render(openers) {
+        const t = (key) => this.i18n.t(key);
+        $("opener-list").replaceChildren(
+            ...openers.map((opener) => {
+                const name = document.createElement("span");
+                name.textContent = t(`media.type.${opener.type}`);
+                const tag = document.createElement("span");
+                tag.className = "kind-tag";
+                tag.textContent = t(opener.kind === "default" ? "openers.tag_default" : `kind.${opener.kind}`);
+                const title = document.createElement("div");
+                title.className = "admin-item-title";
+                title.append(name, tag);
+
+                const summary = document.createElement("p");
+                summary.className = "sub";
+                summary.textContent = this.summary(opener);
+
+                const text = document.createElement("div");
+                text.className = "admin-item-text";
+                text.append(title, summary);
+
+                const actions = document.createElement("div");
+                actions.className = "admin-actions";
+                actions.append(button("chip", t("admin.edit"), () => this.onEdit(opener)));
+
+                const item = document.createElement("li");
+                item.className = "admin-item";
+                item.append(text, actions);
+                return item;
+            }),
+        );
+    }
+}
+
+class OpenerForm {
+    constructor(i18n, api, onSaved) {
+        this.i18n = i18n;
+        this.api = api;
+        this.onSaved = onSaved;
+        this.meta = null;
+        this.opener = null;
+        this.dialog = $("opener-dialog");
+        this.picker = new AppPicker(
+            i18n,
+            api,
+            { select: "opener-app", filter: "opener-app-filter", empty: "opener-apps-empty" },
+            (message) => this.setError(message),
+        );
+
+        $("opener-form").addEventListener("submit", (event) => {
+            event.preventDefault();
+            this.submit();
+        });
+        $("opener-cancel").addEventListener("click", () => this.dialog.close());
+        $("opener-kind").addEventListener("change", () => this.showGroup());
+    }
+
+    open(meta, opener) {
+        this.meta = meta;
+        this.opener = opener;
+        const t = (key, params) => this.i18n.t(key, params);
+        $("opener-title").textContent = t("openers.edit_title", { type: t(`media.type.${opener.type}`) });
+        this.setError("");
+
+        // Une commande déjà enregistrée reste visible et conservable même si les commandes brutes sont interdites
+        const commandAllowed = meta.allow_command || opener.kind === "command";
+        $("opener-kind").replaceChildren(
+            ...meta.kinds.map((kind) => {
+                const option = new Option(t(`kind.${kind}`), kind);
+                option.disabled = kind === "command" && !commandAllowed;
+                return option;
+            }),
+        );
+        $("opener-kind").value = opener.kind;
+        this.picker.reset(opener.spec.desktop_id ?? null);
+        $("opener-command").value = (opener.spec.argv ?? []).join("\n");
+
+        const locked = opener.kind === "command" && !meta.allow_command;
+        $("opener-command").disabled = locked;
+        $("opener-command-hint").textContent = t(locked ? "openers.command_locked" : "openers.command_help");
+
+        this.showGroup();
+        this.dialog.showModal();
+    }
+
+    showGroup() {
+        const kind = $("opener-kind").value;
+        this.dialog.querySelectorAll("[data-opener-group]").forEach((group) => {
+            group.hidden = group.dataset.openerGroup !== kind;
+        });
+        if (kind === "app") {
+            this.picker.load();
+        }
+    }
+
+    setError(message) {
+        $("opener-error").textContent = message;
+        $("opener-error").hidden = message === "";
+    }
+
+    collect() {
+        const kind = $("opener-kind").value;
+        if (kind === "app") {
+            return { kind, spec: { desktop_id: this.picker.value } };
+        }
+        if (kind === "command") {
+            return { kind, spec: { argv: LauncherForm.parseArgv($("opener-command").value) } };
+        }
+        return { kind, spec: {} };
+    }
+
+    async submit() {
+        try {
+            await this.api.setOpener(this.opener.type, this.collect());
+        } catch (error) {
+            this.setError(describeError(this.i18n, error));
+            return;
+        }
+        this.dialog.close();
+        this.onSaved();
+    }
+}
+
+// ----------------------------------------------------------------------
 // Page
 // ----------------------------------------------------------------------
 
@@ -469,6 +683,7 @@ class AdminPage {
         this.i18n = new I18n(MESSAGES);
         this.i18n.apply();
         this.data = null;
+        this.openers = null;
 
         const token = Storage.get(STORAGE_TOKEN);
         if (!token) {
@@ -483,6 +698,8 @@ class AdminPage {
             move: (entry, delta) => this.move(entry, delta),
         });
         this.form = new LauncherForm(this.i18n, this.api, () => this.refresh());
+        this.openerList = new OpenerList(this.i18n, (opener) => this.openerForm.open(this.openers, opener));
+        this.openerForm = new OpenerForm(this.i18n, this.api, () => this.refresh());
 
         $("admin-add").addEventListener("click", () => this.data && this.form.open(this.data));
         $("lang-toggle").addEventListener("click", () => this.i18n.toggle());
@@ -507,7 +724,7 @@ class AdminPage {
 
     async refresh() {
         try {
-            this.data = await this.api.list();
+            [this.data, this.openers] = await Promise.all([this.api.list(), this.api.openers()]);
         } catch (error) {
             this.showError(error);
             return;
@@ -519,6 +736,9 @@ class AdminPage {
     render() {
         if (this.data) {
             this.list.render(this.data.launchers, this.data.browsers);
+        }
+        if (this.openers) {
+            this.openerList.render(this.openers.openers);
         }
     }
 

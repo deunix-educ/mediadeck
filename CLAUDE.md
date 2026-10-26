@@ -47,16 +47,18 @@ mediadeck/
 ├── text.py       TextTyper : texte -> frappes uinput, verrou, relâchement garanti, 500 caractères max
 ├── system.py     SystemControl : logind (suspend/reboot/poweroff), ScreenSaver.Lock, lancement des lanceurs
 ├── launchers.py  LauncherStore (SQLite), validation, build_argv(), applications .desktop, navigateurs
-├── admin.py      API REST /api/* des lanceurs (jeton en en-tête Authorization: Bearer)
+├── admin.py      API REST /api/* des lanceurs et des lecteurs de fichiers (jeton en en-tête Authorization: Bearer)
+├── media.py      MediaLibrary : dossiers autorisés, parcours sûr (.., liens, cachés, extensions), MediaApi (GET /api/media)
+├── restapi.py    json_response / error_response / bearer_authorized, partagés par admin.py et media.py
 ├── qrpage.py     page HTML locale des QR codes (`make qr`) : qrencode -t SVG, images en data: URI, écrite en 600 dans $XDG_RUNTIME_DIR
 ├── tls.py        HTTPS local : CA privée + certificat serveur (CLI openssl), contexte SSL, enable_tls()
 └── web/
-    ├── index.html        sprite SVG + 4 panneaux (player + audio, remote, launchers, system)
+    ├── index.html        sprite SVG + 5 panneaux (player + audio, media, remote, launchers, system)
     ├── admin.html        page /admin : liste + dialogue d'édition des lanceurs
     └── static/common.js  Storage, I18n(messages), $ : partagés par app.js et admin.js
-        static/admin.js   Api, LauncherList, LauncherForm, AdminPage ; static/admin.css
+        static/admin.js   Api, AppPicker, LauncherList, LauncherForm, OpenerList, OpenerForm, AdminPage ; static/admin.css
         static/app.js     Throttle, Connection, PlayerPanel, AudioPanel,
-                          Touchpad, RemotePanel, HoldButton, LauncherPanel, SystemPanel, Toast, Tabs, ScreenKeeper, App
+                          Touchpad, RemotePanel, HoldButton, LauncherPanel, MediaPanel, SystemPanel, Toast, Tabs, ScreenKeeper, App
 ```
 
 Tout tourne dans **une seule boucle asyncio**. Le service doit s'exécuter **dans la session graphique**
@@ -77,6 +79,7 @@ Client → serveur :
 {"domain": "input",  "action": "text", "text": "<1 à 500 caractères>"}   // features.text_input ; erreur renvoyée pour les caractères impossibles
 {"domain": "system", "action": "power", "kind": "suspend|reboot|poweroff"}
 {"domain": "system", "action": "lock|launch", "id": "<launcher id>"}
+{"domain": "system", "action": "open_media", "root": "<id du dossier>", "path": "<chemin relatif, / comme séparateur>"}
 ```
 
 - `seek` est relatif, en µs. Le client l'utilise de préférence à `set_position`, qui exige un trackid valide.
@@ -86,6 +89,7 @@ Serveur → client :
 
 - `{"type":"state", "mpris":{players, active, available}, "audio":{…}, "input":{available, reason, keys, text:{available, reason}}, "system":{…}}`
 - `{"type":"error","message":"…"}`
+- `system.media = {roots:[{id, name}]}` : dossiers de l'onglet Médias (vide = onglet masqué côté client).
 
 ### API REST des lanceurs (`admin.enabled`)
 
@@ -104,6 +108,17 @@ GET    /admin                  page HTML (publique comme /, l'API exige le jeton
 `kind`/`spec` : `web` → `{url, browser, fullscreen}` ; `app` → `{desktop_id}` ; `command` → `{argv:[…]}`.
 403 pour une commande brute si `admin.allow_custom_command` est faux (sauf commande existante inchangée : renommage OK).
 Chaque modification déclenche `notify()` : les tablettes reçoivent la nouvelle liste (`system.launchers`, `system.admin`) sans recharger.
+
+### API REST des médias
+
+```
+GET /api/media?root=<id>&path=<relatif>   {root, path, parent (null au sommet d'une racine), entries:[{name, kind: dir|audio|image|video}], truncated}
+                                          400 chemin invalide / hors racine / pas un dossier ; 404 racine ou dossier inconnu ; route absente si aucun dossier
+GET /api/media/openers                    {openers:[{type, kind, spec}] (audio, image, video), kinds:[default,app,command], allow_command}   (admin.enabled)
+PUT /api/media/openers/{type}             {kind, spec} → 200 ; 404 type inconnu ; 403 commande brute sans allow_custom_command   (admin.enabled)
+```
+
+`kind`/`spec` des lecteurs : `default` → `{}` (`gio open <fichier>`) ; `app` → `{desktop_id}` (`gio launch <desktop> <fichier>`) ; `command` → `{argv}` (le chemin est ajouté en **dernier argument**).
 
 La pochette locale (`file://`) n'est jamais transmise : elle est remplacée par `/art?player=…&v=<hash>`, auquel le client ajoute le jeton.
 
@@ -127,6 +142,9 @@ La pochette locale (`file://`) n'est jamais transmise : elle est remplacée par 
 - Les proxies dbus-next sont typés `Any`, car leurs méthodes `call_*` / `on_*` sont générées dynamiquement.
 - **Page des QR codes = fichier local, jamais une route du serveur** (`make qr`, `--qr`, module `qrpage.py`) : les QR codes contiennent le jeton, une route `/qr` le donnerait à tout le LAN (même limitée à la boucle locale, elle serait fragile derrière un proxy). Page autonome écrite en 600 dans `$XDG_RUNTIME_DIR/mediadeck/access.html` (tmpfs) et ouverte en `file://` : pas de CSP à contourner (`<style>` inline permis hors serveur), pas d'avertissement de certificat, fonctionne serveur arrêté. `qrencode -t SVG` plutôt qu'une bibliothèque JS (aucune dépendance) ; le SVG reçoit `shape-rendering="crispEdges"`, sinon des lignes claires apparaissent entre les modules à l'échelle. Le jeton n'apparaît jamais en texte dans la page, seulement dans les QR codes. Le code du certificat de la CA passe par le port HTTP s'il existe (pas d'avertissement à accepter).
 - **HTTPS par CA privée + `openssl`** plutôt que mkcert : aucune dépendance à installer, et la CA reçoit des `nameConstraints` (réseaux privés, `localhost`, `*.local`, `*.lan`, nom de la machine). La tablette fait confiance à cette CA : si sa clé fuitait, elle ne pourrait pas usurper un site public. Clés EC P-256, CA 10 ans, certificat serveur 825 jours (réémis sans toucher à la CA).
+- **Onglet Médias** (2026-10-26) : liste les fichiers son / image / vidéo de dossiers choisis dans `config.toml` (`[media] roots`, défaut = dossiers XDG Musique/Vidéos/Images existants, jamais `$HOME` ; `[]` = désactivé) et les ouvre **sur le PC**. Chaque fichier est un « lanceur virtuel » de son type : trois **lanceurs spéciaux** (`audio`, `image`, `video`, table `media_openers` de la base des lanceurs, réglables sur `/admin`) reçoivent le chemin en dernier argument. Mêmes règles de confiance que les lanceurs : `default` (`gio open`, réglage initial) et `app` (`.desktop` choisi dans une liste) n'acceptent aucune commande du client, `command` exige `allow_custom_command`. Un lecteur par type (pas de choix multiple). Pas de miniatures (icônes seulement, voir étapes envisagées).
+  **Le client n'envoie jamais de chemin absolu** : `(root, path relatif)` ; `MediaLibrary._resolve` refuse les composantes vides ou commençant par `.` (donc `..` et les fichiers cachés, aussi bien listés qu'ouverts : sinon un caché absent de la liste restait ouvrable par son nom), résout les liens (`resolve(strict=True)`) et exige que le chemin réel reste dans la racine réelle. Les extensions autorisées sont une liste fermée (`.ts` exclu : TypeScript ; pas de `.svg`) et le type vient de l'extension du **fichier réel**, pas du lien (`lien.mp3 -> script.sh` est refusé). Parcours dans un thread (`asyncio.to_thread`), 1000 entrées renvoyées et 20000 examinées au plus, tri naturel (« 2 » avant « 10 »), noms non UTF-8 ignorés (JSON). L'ouverture passe par le WebSocket (`system` / `open_media`, comme `launch`) et `SystemControl._spawn` (session séparée) ; le listage par REST car la réponse peut être grande et le WebSocket client est limité à 4 Ko. API de listage montée seulement si au moins un dossier est configuré, **indépendamment de `admin.enabled`** (d'où `restapi.py`, helpers partagés). Un fichier de chemin de 1000 caractères tient dans la trame de 4 Ko.
+- **Cache de l'interface : pages revalidées, fichiers statiques versionnés** (2026-10-26). Constat : sans `Cache-Control`, un navigateur applique un cache heuristique (≈ 10 % de l'âge du fichier, soit des heures pour un fichier de 3 jours) ; une tablette affichait l'ancienne interface (Lecture et Son séparés, pas de Médias) alors que le serveur servait la nouvelle, et même un rechargement ne remplace pas les sous-ressources en cache. Donc : `Cache-Control: no-cache` par défaut (middleware `security_headers`, ETag → 304) ; `/` et `/admin` sont générés par `render_page()` qui réécrit `"/static/` en `"/static/<version>/` ; `<version>` = empreinte (chemin, taille, date) de `web/static` (`static_version()`), les imports relatifs des modules (`./common.js`) suivent le préfixe ; `/static/<version>/<fichier>` (`versioned_static`, la version n'est que dans l'URL) est servi en `public, max-age=31536000, immutable`, avec contrôle d'appartenance au dossier statique. Les anciennes adresses `/static/<fichier>` restent servies (revalidées). **Limite incompressible** : une page déjà gardée en cache par le navigateur ne peut pas être remplacée par le serveur ; ouvrir le même lien la ressert depuis le cache, une actualisation (une fois) la remplace. Vérifié par reproduction : navigateur ayant mis en cache l'ancienne version (fichiers datés de 3 jours), serveur remplacé, (a) même lien = ancienne interface, (b) Actualiser = nouvelle interface avec URL versionnées, (c) chargements suivants depuis le cache. Ne pas ajouter de `?v=` à la main dans le HTML : c'est `render_page` qui s'en charge, et le test `test_html_source_files_only_reference_static_with_a_leading_slash_quote` impose la forme `"/static/…"`.
 - **Choix sécurisé / non sécurisé = deux écoutes simultanées** (`server.http_port`, 0 par défaut) plutôt qu'un interrupteur : la tablette choisit son adresse sans redémarrer le service, et le HTTP sert de repli quand son navigateur ignore la CA (voir Pièges). `port` garde son rôle (HTTPS dès que `tls_cert` est défini, sinon HTTP) ; `http_port` exige TLS (sans lui, `port` est déjà en HTTP) et doit différer de `port`. Les deux sites partagent **un seul `AppRunner`** (`web.run_app` ne gère pas deux ports avec des réglages TLS différents), donc la même application, la même boucle et le même jeton. Désactivé par défaut car le jeton circule alors en clair sur le LAN ; `make cert` ne l'active pas (il suggère `make http-on`) ; `make http-on [HTTP_PORT=…]` / `make http-off` appellent `--http-port N` (`tls.set_http_port` : regex sur la ligne `port`, relecture par `load_config`, fichier restauré si le résultat est invalide). Activer ce port à la main dans le TOML était trop fragile : un premier essai de l'utilisateur est resté « non concluant » faute de la ligne `http_port`. `make url` affiche deux adresses et deux QR codes ; `make firewall HTTP_PORT=…` ouvre le second port.
 - La CA publique est servie sur `/ca.crt` par le serveur lui-même (route publique, uniquement si `tls_ca` est défini) : la tablette l'installe après avoir accepté l'avertissement une fois, sans second port ni pare-feu à ouvrir (la route existe aussi sur `http_port` : récupération de la CA sans avertissement, avec la même absence d'authentification qu'un avertissement accepté).
 - **CSP stricte** (`script-src 'self'`, `style-src 'self'`) : aucun attribut `style=""` ni script inline dans le HTML. En JS, utiliser `el.style.setProperty()`, qui est autorisé.
@@ -143,6 +161,7 @@ La pochette locale (`file://`) n'est jamais transmise : elle est remplacée par 
 Vérifié :
 - Saisie de texte : 87 tests (dont rejeu des frappes dans un état xkb avec composition : ASCII sur us/fr/de, texte français, accents par touches mortes) ; dans Chromium, 19 vérifications (fenêtre non modale, Envoyer / Envoyer ↵, touches rapides, masquage, caractère impossible, téléphone sans débordement) et rejeu des touches enregistrées : `Bonjour, ça va ? @ 12 € ñ` redonne exactement ce texte sur AZERTY latin9. Frappes réelles via uinput non essayées (elles iraient dans le vrai bureau).
 - Choix sécurisé / non sécurisé (`http_port`, 2026-10-26) : pyright 0 erreur, 107 tests (dont `tests/test_serve.py` : HTTPS avec la CA locale et HTTP en clair côte à côte, chaque port gardant son protocole, libération du port principal si le second est occupé) ; vrai serveur en config isolée : `/` en 200 sur les deux ports, HTTPS refusé sans CA (curl 60), HTTP sur le port TLS refusé, `/ws` 401 sans jeton des deux côtés, WebSocket `wss://` et `ws://` avec jeton, arrêt SIGTERM propre (code 0, ports libérés). Le service systemd et la tablette réelle ne sont pas essayés.
+- Onglet Médias (2026-10-26) : pyright 0 erreur, 149 tests (`tests/test_media.py` : classification, tri, évasions `..` / chemin absolu / liens vers l'extérieur / script déguisé en `.mp3` / boucle de liens / cachés / nom non décodable, API ; lecteurs : validation, `build_open_argv`, stockage, API admin ; configuration). **Vrai serveur** (`dbus-run-session`, config isolée, faux `gio` et faux lecteur journalisant leurs arguments) : listage HTTP, 401 sans jeton ou avec jeton en URL, toutes les évasions refusées (400), ouverture WebSocket par les trois lecteurs (`gio open`, `gio launch <desktop> <fichier>`, commande `recorder --fs --volume=50 <fichier>`) avec un nom `été ♪ $(reboot).mp3` transmis tel quel (pas de shell), refus sans lancement pour les 12 cas invalides. **Chromium piloté par DevTools** : onglet Médias (liste des dossiers, sous-dossiers, fil d'Ariane, retour, actualiser, filtres, message quand le filtre masque les fichiers, ouverture + toast, onglet mémorisé, téléphone sans débordement), un seul dossier (ouvert directement), aucun dossier (onglet masqué, onglet `media` mémorisé → Lecture), page `/admin` (3 lecteurs, dialogue, liste d'applications filtrable, enregistrement, présélection à la réouverture, erreur de validation, anglais) et **non-régression du formulaire des lanceurs** après extraction d'`AppPicker`. Les fichiers ouverts le sont avec un faux `gio` : la vraie ouverture d'une vidéo par l'application par défaut n'est pas essayée, ni la tablette réelle.
 - pyright : 0 erreur ; 59 tests unitaires OK (dont une vraie poignée de main TLS avec la CA locale, le stockage SQLite, la validation, l'API REST via `aiohttp.test_utils`).
 - Fusion Lecture + Son (2026-10-26) : vérifiée dans Chromium piloté par DevTools avec un serveur factice servant la vraie interface (état de démonstration : lecteur + 3 sorties) : paysage 1280×800, 1280×640, 1024×600, 900×500, 800×412, portrait 800×1280, téléphone 412×915, avec et sans lecteur, avec et sans audio, une seule sortie ; barre de volume visible au-dessus de la barre d'onglets dans tous les cas ; ouverture/fermeture de la fenêtre des sorties (bouton, clic extérieur, Échap), mute, curseur, choix de sortie, lecture, bascule de langue, ancien onglet `audio` mémorisé, aucune erreur JavaScript. Correction au passage : l'ombre de la pochette grisait le titre en portrait (`.track { position: relative }`). Non essayé sur la vraie tablette.
 - **UI dans un vrai Chromium** (headless, piloté par le protocole DevTools, serveur isolé) : télécommande + `/admin`, 28 vérifications : barre de 5 onglets (aussi à 360 px, sans débordement), onglet Système réduit aux opérations de session, création web/app, édition d'une commande importée (zone verrouillée), réordonnancement, suppression, bascule de langue, jeton absent/refusé, mise à jour en direct de la grille par WebSocket, et **lancements réels** des trois types (navigateur factice, `.desktop` via `gio`, commande). Aucune erreur JavaScript.
@@ -162,12 +181,14 @@ Vérifié :
 3. Essayer la saisie de texte sur la tablette réelle et dans les applications visées (champ de recherche du navigateur, connexion à un service), puis sous Wayland.
 4. Test d'intégration versionné : déplacer le scénario `dbus-run-session` + faux lecteur dans `tests/` (cible `make test-integration`).
 5. Versionner le test d'interface dans `tests/` (cible `make test-ui`) : pilote DevTools (Node, WebSocket natif) + Chromium headless + serveur isolé (`XDG_CONFIG_HOME`, `XDG_DATA_HOME`, faux `chromium` dans le `PATH`, faux `.desktop`), aujourd'hui seulement joué à la main.
-6. Liste de lecture / file d'attente (`org.mpris.MediaPlayer2.TrackList`, si exposée par le lecteur).
-7. Raccourcis KDE via D-Bus (`org.kde.kglobalaccel`) ou `kscreen-doctor` pour la sortie vidéo.
-8. Éventuellement : documentation mkdocs fr/en si le projet grossit.
+6. Médias : miniatures d'images (route protégée par le jeton, redimensionnement côté serveur), recherche par nom, tri (date, taille), plusieurs lecteurs par type avec choix à l'ouverture, ouverture sur la tablette (lecture dans le navigateur) plutôt que sur le PC.
+7. Liste de lecture / file d'attente (`org.mpris.MediaPlayer2.TrackList`, si exposée par le lecteur).
+8. Raccourcis KDE via D-Bus (`org.kde.kglobalaccel`) ou `kscreen-doctor` pour la sortie vidéo.
+9. Éventuellement : documentation mkdocs fr/en si le projet grossit.
 
 ## Pièges
 
+- Médias : le lecteur « par défaut » dépend des associations MIME de la session (`gio open`) : si une vidéo s'ouvre dans le mauvais programme, régler l'association du système ou choisir une application sur `/admin`. Une racine configurée mais absente (disque non monté) reste listée et répond « media folder unavailable » ; elle est relue à chaque requête, sans redémarrage. Les dossiers par défaut sont lus au démarrage (un dossier XDG créé ensuite demande un redémarrage). Le jeton donne accès aux **noms** des fichiers des racines.
 - Un VPN actif sur l'appareil client (Proton VPN sur le Pixel 8a de l'utilisateur) bloque le LAN : la page expire (ERR_CONNECTION_TIMED_OUT) alors que le serveur répond correctement depuis le PC. Réglage Proton : Paramètres → Connexion → Paramètres avancés → Connexions LAN ; vérifier aussi « Bloquer les connexions sans VPN » dans les réglages VPN d'Android.
 - Android : les apps visant l'API 24+ (WebView système, donc probablement DuckDuckGo) ignorent les CA utilisateur sauf opt-in ; les navigateurs Chromium autonomes (Chrome, Brave, Vanadium) les respectent, Firefox demande un réglage caché. Non vérifié sur la tablette de l'utilisateur (DuckDuckGo a de plus traité `https://192.168.1.104:8765/ca.crt` saisi à la main comme une recherche).
 - Passer en HTTPS change l'origine : le jeton mémorisé (localStorage) et une PWA installée en `http://` ne servent plus, la tablette doit rescanner le QR code. Le port principal ne répond plus qu'en TLS ; avec `http_port`, l'adresse HTTP en clair reste une origine distincte (jeton mémorisé à part, pas de Wake Lock ni de PWA).
