@@ -49,6 +49,9 @@ allow_custom_command = false
 # roots = ["~/Musique", "~/Vidéos", "~/Images"]
 # Miniatures d'images et image du fichier joué (ffmpeg, optionnel : sans lui, les icônes restent).
 # thumbnails = true
+# Liens symboliques suivis où qu'ils pointent (dossier rangé sur un autre disque et relié depuis un dossier ci-dessus).
+# false : seuls les liens dont la cible reste dans le dossier configuré sont suivis.
+# follow_symlinks = true
 
 # Lanceurs : IMPORTÉS UNE SEULE FOIS dans la base (~/.local/share/mediadeck/launchers.db) au premier
 # démarrage, puis gérés sur /admin ; cette section est ensuite ignorée et peut être supprimée.

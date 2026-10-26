@@ -103,6 +103,13 @@ class ParseConfigTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             parse_config({"server": {"token": TOKEN}, "media": {"thumbnails": "oui"}})
 
+    def test_media_follow_symlinks_switch(self) -> None:
+        self.assertTrue(parse_config({"server": {"token": TOKEN}}).media_follow_symlinks)
+        config = parse_config({"server": {"token": TOKEN}, "media": {"follow_symlinks": False}})
+        self.assertFalse(config.media_follow_symlinks)
+        with self.assertRaises(ConfigError):
+            parse_config({"server": {"token": TOKEN}, "media": {"follow_symlinks": "non"}})
+
     def test_max_volume_bounds(self) -> None:
         with self.assertRaises(ConfigError):
             parse_config({"server": {"token": TOKEN}, "audio": {"max_volume": 3}})

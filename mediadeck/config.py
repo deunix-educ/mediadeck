@@ -60,6 +60,8 @@ class Config:
     media_roots: tuple[Path, ...] | None = None
     # Miniatures et images d'illustration (ffmpeg) ; désactivables
     media_thumbnails: bool = True
+    # Liens symboliques suivis où qu'ils pointent ; faux = seuls ceux dont la cible reste dans le dossier configuré
+    media_follow_symlinks: bool = True
 
     @property
     def tls_enabled(self) -> bool:
@@ -97,6 +99,13 @@ def _parse_media_thumbnails(media: dict[str, Any]) -> bool:
     if not isinstance(thumbnails, bool):
         raise ConfigError("media.thumbnails must be a boolean")
     return thumbnails
+
+
+def _parse_media_follow_symlinks(media: dict[str, Any]) -> bool:
+    follow = media.get("follow_symlinks", True)
+    if not isinstance(follow, bool):
+        raise ConfigError("media.follow_symlinks must be a boolean")
+    return follow
 
 
 def _parse_launchers(raw: Any) -> tuple[Launcher, ...]:
@@ -208,6 +217,7 @@ def parse_config(data: dict[str, Any]) -> Config:
         enable_text_input=enable_text_input,
         media_roots=_parse_media_roots(media),
         media_thumbnails=_parse_media_thumbnails(media),
+        media_follow_symlinks=_parse_media_follow_symlinks(media),
     )
 
 

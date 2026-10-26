@@ -153,6 +153,20 @@ class EscapeTest(LibraryCase):
         self.assertEqual(self.library.file("musique", "lien.mp3"), (self.outside / "private.mp3", "audio"))
         self.assertEqual(self.library.file("musique", "dehors/private.mp3"), (self.outside / "private.mp3", "audio"))
 
+    def test_strict_mode_keeps_links_inside_the_root(self) -> None:
+        # follow_symlinks = false : seuls les liens dont la cible reste dans la racine sont suivis
+        strict = MediaLibrary([self.root], follow_symlinks=False)
+        touch(self.root / "Vrai" / "a.mp3")
+        os.symlink(self.root / "Vrai", self.root / "Alias")
+        os.symlink(self.outside, self.root / "dehors")
+        os.symlink(self.outside / "private.mp3", self.root / "lien.mp3")
+        self.assertEqual(self.names(strict.list("musique", "")), [("Alias", "dir"), ("Vrai", "dir")])
+        self.assertEqual(strict.file("musique", "Alias/a.mp3")[0], self.root / "Vrai" / "a.mp3")
+        for path in ("dehors", "dehors/private.mp3", "lien.mp3"):
+            with self.subTest(path=path), self.assertRaisesRegex(MediaError, "outside"):
+                strict.file("musique", path)
+        self.assertIsNone(strict.locate(self.root / "dehors" / "private.mp3"))
+
     def test_a_link_never_lets_a_non_media_file_through(self) -> None:
         os.symlink(self.outside / "private.sh", self.root / "lien.mp3")
         os.symlink(self.outside, self.root / "dehors")
@@ -359,6 +373,15 @@ class SearchTest(LibraryCase):
         result = self.found(self.library.search("studio", "musique"))
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0][1:], ("studio.flac", "audio"))
+
+    def test_strict_mode_does_not_search_through_links_or_use_outside_pictures(self) -> None:
+        strict = MediaLibrary([self.root], follow_symlinks=False)
+        touch(self.outside / "ete-ailleurs.mp3")
+        os.symlink(self.outside, self.root / "Archive")
+        self.assertEqual(self.found(strict.search("ete-ailleurs", "musique")), [])
+        file = touch(self.root / "a.mp3")
+        os.symlink(self.outside / "private.mp3", self.root / "cover.jpg")
+        self.assertIsNone(strict.find_art("musique", file))
 
     def test_invalid_queries(self) -> None:
         for query in (None, 5, "", "a", " é ", "x" * 101, "a b c d e f g h i"):

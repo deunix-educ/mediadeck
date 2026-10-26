@@ -86,7 +86,9 @@ class MediaDeckServer:
         self.launchers = LauncherStore()
         self.thumbnailer = Thumbnailer() if config.media_thumbnails else None
         self.media = MediaLibrary(
-            config.media_roots, thumbnails=self.thumbnailer is not None and self.thumbnailer.available
+            config.media_roots,
+            thumbnails=self.thumbnailer is not None and self.thumbnailer.available,
+            follow_symlinks=config.media_follow_symlinks,
         )
         if config.media_thumbnails and not self.media.thumbnails:
             log.info("ffmpeg not found: no thumbnails (apt install ffmpeg)")

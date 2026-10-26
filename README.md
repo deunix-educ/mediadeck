@@ -44,6 +44,7 @@ make config           # ~/.config/mediadeck/config.toml (mode 600) avec un jeton
 make uinput           # règle udev « uaccess » pour /dev/uinput (sudo)
 make service-install  # service systemd utilisateur, démarré avec la session graphique
 make url              # URL + QR code à scanner avec la tablette
+make qr               # ou une page du navigateur du PC avec les QR codes en grand
 ```
 
 Sur la tablette : scanner le QR code, puis menu du navigateur → « Ajouter à l'écran d'accueil ».
@@ -134,7 +135,7 @@ Un appui sur un fichier l'**ouvre sur le PC** ; la tablette reste une télécomm
   serveur refuse `..`, les chemins absolus et les entrées cachées (`.x`). Les **liens symboliques sont suivis, où qu'ils
   pointent** : un dossier rangé sur un autre disque se relie simplement depuis le dossier configuré
   (`ln -s /disque/Films ~/Vidéos/Films`). Ce sont donc vos propres liens qui décident de ce qui est visible depuis la
-  tablette. Seules les extensions de médias connues sont listées et ouvertes (jamais un script, même renommé en `.mp3` ou
+  tablette ; `[media] follow_symlinks = false` ne suit que les liens dont la cible reste dans le dossier configuré. Seules les extensions de médias connues sont listées et ouvertes (jamais un script, même renommé en `.mp3` ou
   lié vers un `.sh`). L'API `GET /api/media` exige le jeton en en-tête `Authorization` ; les
   miniatures (`/thumb`) l'ont dans l'URL, comme `/art`, car une balise image n'envoie pas d'en-tête. `ffmpeg` est lancé sans
   entrée standard, limité aux fichiers locaux, avec un délai et trois processus au plus ; une image est lue par le seul

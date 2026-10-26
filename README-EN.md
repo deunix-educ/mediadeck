@@ -44,6 +44,7 @@ make config           # ~/.config/mediadeck/config.toml (mode 600) with a random
 make uinput           # "uaccess" udev rule for /dev/uinput (sudo)
 make service-install  # systemd user service, started with the graphical session
 make url              # URL + QR code to scan with the tablet
+make qr               # or a PC browser page with the QR codes shown large
 ```
 
 On the tablet: scan the QR code, then browser menu → "Add to Home screen".
@@ -133,7 +134,7 @@ PC**; the tablet stays a remote control.
 - **Security**: the client never sends an absolute path, only a root folder and a relative path. The server refuses
   `..`, absolute paths and hidden entries (`.x`). **Symbolic links are followed wherever they point**: a folder kept on
   another disk is simply linked from the configured folder (`ln -s /disk/Films ~/Videos/Films`). Your own links
-  therefore decide what can be seen from the tablet. Only known media extensions are listed and opened (never a script,
+  therefore decide what can be seen from the tablet; `[media] follow_symlinks = false` only follows links whose target stays inside the configured folder. Only known media extensions are listed and opened (never a script,
   even renamed `.mp3` or linked to a `.sh`). `GET /api/media`
   requires the token in the `Authorization` header; thumbnails (`/thumb`) have it in the URL, like `/art`, because an
   image tag sends no header. `ffmpeg` runs with no standard input, limited to local files, with a timeout and at most
