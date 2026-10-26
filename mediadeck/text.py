@@ -52,14 +52,18 @@ class TextTyper:
         self.reason = ""
         if not enabled:
             self.reason = "disabled in config (features.text_input)"
-            return
-        if not keyboard.available:
+        elif not keyboard.available:
             self.reason = keyboard.reason or "virtual input unavailable"
-            return
-        try:
-            load_xkb()
-        except KeymapError as exc:
-            self.reason = str(exc)
+        else:
+            try:
+                load_xkb()
+            except KeymapError as exc:
+                self.reason = str(exc)
+        # Sans cette ligne, un bouton « Clavier » grisé sur la tablette n'a aucune trace côté PC
+        if self.reason:
+            log.info("text entry unavailable: %s", self.reason)
+        else:
+            log.info("text entry enabled")
 
     @property
     def available(self) -> bool:

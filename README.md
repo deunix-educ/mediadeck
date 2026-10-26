@@ -57,6 +57,8 @@ redémarrer le service (`systemctl --user restart mediadeck`).
 
 - **Accès sécurisé (HTTPS)**, recommandé : trafic chiffré, Wake Lock et installation en application. Il faut installer
   **une seule fois** la CA sur la tablette (voir « HTTPS local »).
+- **Saisie de texte (bouton « Clavier »)**, facultative et **désactivée par défaut** : `text_input = true` sous
+  `[features]` de `config.toml` pour l'activer (voir « Saisie de texte »). Sans cela, le bouton reste grisé.
 - **Accès non sécurisé (HTTP)** : rien à installer, mais le jeton circule en clair sur le réseau local. Sans `make cert`,
   c'est le seul mode ; avec `make cert` puis `make http-on`, les deux coexistent (voir « Choisir : sécurisé ou non »).
 - Si le pare-feu `ufw` est actif : `make firewall` (ajouter `HTTP_PORT=8766` si le HTTP en clair est activé).
@@ -198,6 +200,12 @@ clavier. **Le presse-papiers n'est pas utilisé** : rien ne reste dans l'histori
 
 - **Désactivée par défaut** : `[features] text_input = true` pour l'activer. C'est un clavier complet : avec le jeton,
   on peut ouvrir un terminal (touche Super) et y taper des commandes. Ne l'activez que si cela vous convient.
+  Après modification de `config.toml`, redémarrer le service (`systemctl --user restart mediadeck`).
+- **Bouton « Clavier » grisé ?** Appuyer dessus affiche la raison (elle figure aussi dans le journal du service, ligne
+  `text entry unavailable: …`, par `journalctl --user -u mediadeck`). Sur une installation neuve, c'est presque toujours
+  `disabled in config (features.text_input)` : ajouter `text_input = true` sous `[features]`. Autres raisons :
+  `cannot open /dev/uinput` (lancer `make uinput`, puis fermer et rouvrir la session graphique) ;
+  `libxkbcommon not found` (`apt install libxkbcommon0 xkb-data`) ; `python3-evdev not installed` (`make install`).
 - 500 caractères par envoi (limite de taille d'un message WebSocket).
 - Un caractère absent de la disposition (→, emoji…) est ignoré, le reste est tapé et une erreur le signale. Les
   apostrophes, guillemets, « … » et tirets typographiques sont remplacés par leur équivalent ASCII.

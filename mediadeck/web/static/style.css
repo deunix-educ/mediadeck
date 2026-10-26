@@ -50,7 +50,8 @@ button {
     touch-action: manipulation;
 }
 
-button:disabled {
+button:disabled,
+button[aria-disabled="true"] {
     opacity: 0.35;
     cursor: default;
 }

@@ -863,7 +863,15 @@ class TextPanel {
         this.dialog = $("text-dialog");
         this.input = $("text-input");
 
-        $("text-open").addEventListener("click", () => this.open());
+        this.unavailable = null; // raison de l'indisponibilité, ou null
+        $("text-open").addEventListener("click", () => {
+            if (this.unavailable === null) {
+                this.open();
+            } else {
+                // Une infobulle est invisible sur une tablette : un appui sur le bouton grisé dit pourquoi
+                this.toast.show(this.i18n.t("text.unavailable", { reason: this.unavailable }));
+            }
+        });
         $("text-close").addEventListener("click", () => this.dialog.close());
         $("text-send").addEventListener("click", () => this.send(false));
         // La touche « Envoyer » du clavier tactile valide le formulaire : texte puis Entrée
@@ -907,9 +915,12 @@ class TextPanel {
     update(input) {
         const text = input.text ?? { available: false, reason: "" };
         const button = $("text-open");
-        button.disabled = !input.available || !text.available;
-        button.title = button.disabled ? this.i18n.t("text.unavailable", { reason: text.reason || input.reason }) : "";
-        if (button.disabled && this.dialog.open) {
+        const unavailable = !input.available || !text.available;
+        // aria-disabled plutôt que disabled : un bouton désactivé ne reçoit aucun appui, donc ne pourrait rien expliquer
+        this.unavailable = unavailable ? text.reason || input.reason || "?" : null;
+        button.setAttribute("aria-disabled", String(unavailable));
+        button.title = unavailable ? this.i18n.t("text.unavailable", { reason: this.unavailable }) : "";
+        if (unavailable && this.dialog.open) {
             this.dialog.close();
         }
     }

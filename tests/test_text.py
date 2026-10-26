@@ -252,6 +252,20 @@ class TextTyperTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(keyboard.down, set())
 
 
+class TextTyperStartupLogTest(unittest.TestCase):
+    """L'état de la saisie est journalisé au démarrage : sans cela, un bouton grisé n'a aucune trace côté PC."""
+
+    def test_disabled_in_config_is_logged_with_the_setting_name(self) -> None:
+        with self.assertLogs("mediadeck.text", level="INFO") as logs:
+            typer(enabled=False)
+        self.assertIn("features.text_input", "\n".join(logs.output))
+
+    def test_enabled_is_logged(self) -> None:
+        with self.assertLogs("mediadeck.text", level="INFO") as logs:
+            typer(enabled=True)
+        self.assertIn("text entry enabled", "\n".join(logs.output))
+
+
 class VirtualInputKeysTest(unittest.TestCase):
     class Device:
         def __init__(self) -> None:

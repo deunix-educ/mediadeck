@@ -57,6 +57,8 @@ Run every `make` command **from the project folder** (the one containing the `Ma
 
 - **Secure access (HTTPS)**, recommended: encrypted traffic, Wake Lock and app installation. The CA must be installed
   on the tablet **once** (see "Local HTTPS").
+- **Text entry ("Keyboard" button)**, optional and **off by default**: set `text_input = true` under `[features]` in
+  `config.toml` to enable it (see "Text entry"). Without it the button stays greyed out.
 - **Unsecured access (HTTP)**: nothing to install, but the token travels in clear on the local network. Without
   `make cert` it is the only mode; with `make cert` then `make http-on`, both coexist (see "Choosing: secure or
   unsecured").
@@ -195,7 +197,13 @@ libxkbcommon. Shift, AltGr and dead keys (ê, ñ…) are handled; keys go throug
 **The clipboard is not used**: nothing stays in Klipper's history, passwords included.
 
 - **Off by default**: set `[features] text_input = true` to enable it. It is a full keyboard: with the token, someone
-  can open a terminal (Super key) and type commands. Enable it only if that is acceptable.
+  can open a terminal (Super key) and type commands. Enable it only if that is acceptable. After editing `config.toml`,
+  restart the service (`systemctl --user restart mediadeck`).
+- **"Keyboard" button greyed out?** Tapping it shows the reason (it is also in the service log, line
+  `text entry unavailable: …`, via `journalctl --user -u mediadeck`). On a fresh install it is almost always
+  `disabled in config (features.text_input)`: add `text_input = true` under `[features]`. Other reasons:
+  `cannot open /dev/uinput` (run `make uinput`, then log out and back in to the graphical session);
+  `libxkbcommon not found` (`apt install libxkbcommon0 xkb-data`); `python3-evdev not installed` (`make install`).
 - 500 characters per send (WebSocket message size limit).
 - A character missing from the layout (→, emoji…) is skipped, the rest is typed and an error reports it. Typographic
   apostrophes, quotes, "…" and dashes are replaced by their ASCII equivalent.

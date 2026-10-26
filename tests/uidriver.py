@@ -35,7 +35,8 @@ def state(scenario: str) -> dict[str, Any]:
         "type": "state", "version": "test",
         "mpris": {"players": players, "active": PLAYER["name"] if players else None, "available": True},
         "audio": {"available": True, "default": "hdmi", "max_volume": 1.0, "sinks": SINKS},
-        "input": {"available": True, "reason": None, "keys": [], "text": {"available": False, "reason": None}},
+        "input": {"available": True, "reason": None, "keys": [],
+                  "text": {"available": False, "reason": "disabled in config (features.text_input)"}},
         "system": {"power": True, "admin": True, "launchers": [], "media": media},
     }
 
