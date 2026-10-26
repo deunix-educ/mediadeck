@@ -27,7 +27,10 @@ make install      # .venv + dépendances (+ pyright)
 make config       # ~/.config/mediadeck/config.toml (mode 600) + jeton aléatoire
 make dev          # serveur au premier plan, logs debug
 make lint test    # pyright + unittest
+make cert         # HTTPS local (CA privée + certificat), à lancer après `make config`
+make http-on/off  # port HTTP en clair à côté du HTTPS
 make url          # URL tablette + QR code
+make qr           # page locale avec les QR codes en grand
 make uinput       # règle udev uaccess (sudo)
 make service-install / status / logs
 ```

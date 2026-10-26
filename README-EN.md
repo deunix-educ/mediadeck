@@ -41,11 +41,25 @@ KDE Connect is not required; it can stay installed for its other features.
 make deps             # system packages (sudo): venv, gcc, pactl, qrencode, ffmpeg
 make install          # .venv + Python dependencies
 make config           # ~/.config/mediadeck/config.toml (mode 600) with a random token
+make cert             # secure access (HTTPS): local CA + certificate, enabled in config.toml
+make http-on          # optional: also keep an unencrypted HTTP access (port 8766)
 make uinput           # "uaccess" udev rule for /dev/uinput (sudo)
 make service-install  # systemd user service, started with the graphical session
-make url              # URL + QR code to scan with the tablet
+make url              # URL(s) + QR code(s) to scan with the tablet
 make qr               # or a PC browser page with the QR codes shown large
 ```
+
+Run every `make` command **from the project folder** (the one containing the `Makefile`), not from
+`~/.config/mediadeck`. `make cert` and `make http-on` come after `make config` (they edit `config.toml`) and before
+`make service-install`, so the service starts in the right mode; if run later, restart the service
+(`systemctl --user restart mediadeck`).
+
+- **Secure access (HTTPS)**, recommended: encrypted traffic, Wake Lock and app installation. The CA must be installed
+  on the tablet **once** (see "Local HTTPS").
+- **Unsecured access (HTTP)**: nothing to install, but the token travels in clear on the local network. Without
+  `make cert` it is the only mode; with `make cert` then `make http-on`, both coexist (see "Choosing: secure or
+  unsecured").
+- If the `ufw` firewall is active: `make firewall` (add `HTTP_PORT=8766` if plain HTTP is enabled).
 
 On the tablet: scan the QR code, then browser menu → "Add to Home screen".
 The token is stored, then removed from the address bar.

@@ -41,11 +41,24 @@ KDE Connect n'est pas nécessaire : il peut rester installé pour ses autres fon
 make deps             # paquets système (sudo) : venv, gcc, pactl, qrencode, ffmpeg
 make install          # .venv + dépendances Python
 make config           # ~/.config/mediadeck/config.toml (mode 600) avec un jeton aléatoire
+make cert             # accès sécurisé (HTTPS) : CA locale + certificat, activés dans config.toml
+make http-on          # facultatif : garde aussi un accès HTTP en clair (port 8766)
 make uinput           # règle udev « uaccess » pour /dev/uinput (sudo)
 make service-install  # service systemd utilisateur, démarré avec la session graphique
-make url              # URL + QR code à scanner avec la tablette
+make url              # URL(s) + QR code(s) à scanner avec la tablette
 make qr               # ou une page du navigateur du PC avec les QR codes en grand
 ```
+
+Toutes les commandes `make` se lancent **depuis le dossier du projet** (celui qui contient le `Makefile`), pas depuis
+`~/.config/mediadeck`. `make cert` et `make http-on` se placent après `make config` (ils modifient `config.toml`) et
+avant `make service-install`, pour que le service démarre déjà avec le bon mode ; s'ils sont lancés plus tard,
+redémarrer le service (`systemctl --user restart mediadeck`).
+
+- **Accès sécurisé (HTTPS)**, recommandé : trafic chiffré, Wake Lock et installation en application. Il faut installer
+  **une seule fois** la CA sur la tablette (voir « HTTPS local »).
+- **Accès non sécurisé (HTTP)** : rien à installer, mais le jeton circule en clair sur le réseau local. Sans `make cert`,
+  c'est le seul mode ; avec `make cert` puis `make http-on`, les deux coexistent (voir « Choisir : sécurisé ou non »).
+- Si le pare-feu `ufw` est actif : `make firewall` (ajouter `HTTP_PORT=8766` si le HTTP en clair est activé).
 
 Sur la tablette : scanner le QR code, puis menu du navigateur → « Ajouter à l'écran d'accueil ».
 Le jeton est mémorisé puis retiré de la barre d'adresse.
