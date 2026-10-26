@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import itertools
 import logging
 from collections.abc import Callable
 from typing import Any
 
 from dbus_next.signature import Variant
 from dbus_next.aio.message_bus import MessageBus
+from dbus_next.introspection import Node
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +33,65 @@ _METADATA_KEYS = {
 }
 
 _LOOP_VALUES = ("None", "Track", "Playlist")
+
+# Description des interfaces MPRIS (spécification MPRIS 2), utilisée à la place de l'introspection du lecteur :
+# Chromium et Brave répondent aux méthodes et aux propriétés mais renvoient une introspection vide, ce qui empêchait
+# dbus-next de construire un proxy (« interface not found on this object »).
+_INTROSPECTION = Node.parse("""<node>
+  <interface name="org.freedesktop.DBus.Properties">
+    <method name="Get"><arg direction="in" type="s"/><arg direction="in" type="s"/><arg direction="out" type="v"/></method>
+    <method name="Set"><arg direction="in" type="s"/><arg direction="in" type="s"/><arg direction="in" type="v"/></method>
+    <method name="GetAll"><arg direction="in" type="s"/><arg direction="out" type="a{sv}"/></method>
+    <signal name="PropertiesChanged"><arg type="s"/><arg type="a{sv}"/><arg type="as"/></signal>
+  </interface>
+  <interface name="org.mpris.MediaPlayer2">
+    <method name="Raise"/>
+    <method name="Quit"/>
+    <property name="CanQuit" type="b" access="read"/>
+    <property name="Fullscreen" type="b" access="readwrite"/>
+    <property name="CanSetFullscreen" type="b" access="read"/>
+    <property name="CanRaise" type="b" access="read"/>
+    <property name="HasTrackList" type="b" access="read"/>
+    <property name="Identity" type="s" access="read"/>
+    <property name="DesktopEntry" type="s" access="read"/>
+    <property name="SupportedUriSchemes" type="as" access="read"/>
+    <property name="SupportedMimeTypes" type="as" access="read"/>
+  </interface>
+  <interface name="org.mpris.MediaPlayer2.Player">
+    <method name="Next"/>
+    <method name="Previous"/>
+    <method name="Pause"/>
+    <method name="PlayPause"/>
+    <method name="Stop"/>
+    <method name="Play"/>
+    <method name="Seek"><arg direction="in" type="x" name="Offset"/></method>
+    <method name="SetPosition"><arg direction="in" type="o" name="TrackId"/><arg direction="in" type="x" name="Position"/></method>
+    <method name="OpenUri"><arg direction="in" type="s" name="Uri"/></method>
+    <signal name="Seeked"><arg type="x" name="Position"/></signal>
+    <property name="PlaybackStatus" type="s" access="read"/>
+    <property name="LoopStatus" type="s" access="readwrite"/>
+    <property name="Rate" type="d" access="readwrite"/>
+    <property name="Shuffle" type="b" access="readwrite"/>
+    <property name="Metadata" type="a{sv}" access="read"/>
+    <property name="Volume" type="d" access="readwrite"/>
+    <property name="Position" type="x" access="read"/>
+    <property name="MinimumRate" type="d" access="read"/>
+    <property name="MaximumRate" type="d" access="read"/>
+    <property name="CanGoNext" type="b" access="read"/>
+    <property name="CanGoPrevious" type="b" access="read"/>
+    <property name="CanPlay" type="b" access="read"/>
+    <property name="CanPause" type="b" access="read"/>
+    <property name="CanSeek" type="b" access="read"/>
+    <property name="CanControl" type="b" access="read"/>
+  </interface>
+</node>""")
+
+# Un lecteur peut prendre son nom de bus bien avant de répondre (objets exportés plus tard, ou boucle occupée à charger
+# un fichier lu par le réseau) : pauses avant les premières tentatives de rattachement, puis une tentative toutes
+# les RETRY_EVERY secondes tant qu'il reste sur le bus. Chaque tentative a un délai maximal.
+ATTACH_PAUSES = (0.3, 0.5, 1.0, 2.0, 4.0)
+RETRY_EVERY = 3.0
+ATTACH_TIMEOUT = 5.0
 
 
 def unwrap(value: Any) -> Any:
@@ -72,6 +133,20 @@ class Player:
         self.state: dict[str, Any] = {}
         self.position_us = 0
         self.position_stamp = 0.0
+        self._unsubscribers: list[Callable[[], None]] = []
+
+    def on_close(self, unsubscribe: Callable[[], None]) -> None:
+        """Enregistre le désabonnement d'un signal, exécuté par close()."""
+        self._unsubscribers.append(unsubscribe)
+
+    def close(self) -> None:
+        """Se désabonne des signaux : un lecteur relancé sous le même nom ne doit pas réveiller l'ancien objet."""
+        unsubscribers, self._unsubscribers = self._unsubscribers, []
+        for unsubscribe in unsubscribers:
+            try:
+                unsubscribe()
+            except Exception as exc:  # noqa: BLE001 - le bus peut déjà être fermé
+                log.debug("cannot unsubscribe from %s: %s", self.bus_name, exc)
 
     @property
     def art_url(self) -> str | None:
@@ -184,8 +259,13 @@ class MprisManager:
     def _on_name_owner_changed(self, name: str, old_owner: str, new_owner: str) -> None:
         if not name.startswith(MPRIS_PREFIX):
             return
-        if old_owner and name in self._players:
-            self._remove(name)
+        if old_owner:
+            # Le lecteur a quitté le bus : plus rien à rattacher (ajout en attente) ni à suivre
+            pending = self._pending.pop(name, None)
+            if pending is not None:
+                pending.cancel()
+            if name in self._players:
+                self._remove(name)
         if new_owner:
             # Laisse le lecteur publier son objet avant l'introspection
             self._schedule(name, self._add(name, delay=0.3))
@@ -205,18 +285,30 @@ class MprisManager:
         task.add_done_callback(on_done)
 
     async def _add(self, name: str, delay: float = 0.0) -> None:
-        if delay:
-            await asyncio.sleep(delay)
-        try:
-            introspection = await self._bus.introspect(name, MPRIS_PATH)
-            proxy = self._bus.get_proxy_object(name, MPRIS_PATH, introspection)
-            root: Any = proxy.get_interface(ROOT_IFACE)
-            player_iface: Any = proxy.get_interface(PLAYER_IFACE)
-            props: Any = proxy.get_interface(PROPS_IFACE)
-        except Exception as exc:  # noqa: BLE001 - lecteur au D-Bus défaillant
-            log.warning("cannot attach MPRIS player %s: %s", name, exc)
+        """Rattache un lecteur, en réessayant tant qu'il reste sur le bus (la tâche est annulée à son départ)."""
+        pauses = itertools.chain((delay,), ATTACH_PAUSES, itertools.repeat(RETRY_EVERY))
+        attempts = 0
+        for pause in pauses:
+            if pause:
+                await asyncio.sleep(pause)
+            attempts += 1
+            try:
+                player = await asyncio.wait_for(self._attach(name), ATTACH_TIMEOUT)
+            except Exception as exc:  # noqa: BLE001 - lecteur au D-Bus défaillant ou pas encore prêt
+                log.debug("MPRIS player %s not ready (attempt %d): %s", name, attempts, exc)
+                if attempts == len(ATTACH_PAUSES) + 1:
+                    log.warning("MPRIS player %s does not answer yet (%r), still trying", name, exc)
+                continue
+            self._players[name] = player
+            log.info("MPRIS player added: %s", name)
+            self._on_change()
             return
 
+    async def _attach(self, name: str) -> Player:
+        proxy = self._bus.get_proxy_object(name, MPRIS_PATH, _INTROSPECTION)
+        root: Any = proxy.get_interface(ROOT_IFACE)
+        player_iface: Any = proxy.get_interface(PLAYER_IFACE)
+        props: Any = proxy.get_interface(PROPS_IFACE)
         player = Player(name, root, player_iface, props)
 
         def on_properties_changed(interface: str, _changed: dict[str, Any], _invalidated: list[str]) -> None:
@@ -229,21 +321,15 @@ class MprisManager:
             self._on_change()
 
         props.on_properties_changed(on_properties_changed)
-        # dbus-next ne génère on_seeked que si le signal figure dans l'introspection :
-        # certains lecteurs (navigateurs) ne le déclarent pas, la position est alors relue à la demande
-        subscribe_seeked = getattr(player_iface, "on_seeked", None)
-        if subscribe_seeked is not None:
-            subscribe_seeked(on_seeked)
-        else:
-            log.debug("MPRIS player %s does not declare the Seeked signal", name)
+        player.on_close(lambda: props.off_properties_changed(on_properties_changed))
+        player_iface.on_seeked(on_seeked)
+        player.on_close(lambda: player_iface.off_seeked(on_seeked))
         try:
             await player.refresh()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("cannot read MPRIS player %s: %s", name, exc)
-            return
-        self._players[name] = player
-        log.info("MPRIS player added: %s", name)
-        self._on_change()
+        except BaseException:
+            player.close()
+            raise
+        return player
 
     async def _refresh(self, player: Player) -> None:
         # Regroupe les rafales de PropertiesChanged
@@ -255,8 +341,19 @@ class MprisManager:
             return
         self._on_change()
 
+    def stop(self) -> None:
+        """Annule les rattachements en attente et se désabonne de tous les lecteurs."""
+        for task in self._pending.values():
+            task.cancel()
+        self._pending.clear()
+        for player in self._players.values():
+            player.close()
+        self._players.clear()
+
     def _remove(self, name: str) -> None:
-        self._players.pop(name, None)
+        player = self._players.pop(name, None)
+        if player is not None:
+            player.close()
         log.info("MPRIS player removed: %s", name)
         self._on_change()
 
