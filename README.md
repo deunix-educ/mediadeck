@@ -62,6 +62,7 @@ advertise_host = "192.168.1.104"   # optionnel : adresse du QR code (sinon déte
 tls_cert = "~/.config/mediadeck/tls/server.pem"       # écrits par `make cert` (HTTPS)
 tls_key = "~/.config/mediadeck/tls/server.key"
 tls_ca = "~/.config/mediadeck/tls/mediadeck-ca.crt"   # servi sur /ca.crt pour la tablette
+http_port = 8766       # optionnel : port HTTP en clair en plus du HTTPS (0 ou absent = désactivé)
 
 [audio]
 max_volume = 1.0       # plafond depuis la tablette
@@ -128,6 +129,16 @@ clavier. **Le presse-papiers n'est pas utilisé** : rien ne reste dans l'histori
   xkb, pas dans chaque application). Un moteur de saisie actif sur le PC (fcitx, ibus) peut modifier le résultat.
 - Dépend de libxkbcommon et des données xkb (paquets `libxkbcommon0` et `xkb-data`, installés par `make deps`).
 
+## Page des QR codes
+
+`make qr` ouvre dans le navigateur du PC une page qui affiche, en grand, les codes à scanner avec la tablette :
+accès **sécurisé** (HTTPS), accès **non sécurisé** (HTTP, si `http_port` est activé) et **certificat de la CA** à
+installer. Seuls les codes utiles à la configuration en cours apparaissent. La langue suit `LANG`.
+
+Les codes contiennent le jeton : la page n'est donc **jamais servie par le serveur** (un client du réseau pourrait la
+lire). Elle est écrite en mode 600 dans `$XDG_RUNTIME_DIR/mediadeck/access.html` (vidé à la déconnexion) et ouverte en
+`file://`. Elle s'appuie sur `qrencode` (installé par `make deps`) et ne dépend d'aucun script ni ressource externe.
+
 ## HTTPS local
 
 Certains navigateurs mobiles exigent HTTPS, de même que l'API Wake Lock et l'installation propre en PWA.
@@ -149,7 +160,8 @@ Sur la tablette, **une seule fois** :
 
 Notes :
 
-- Le port ne parle plus que HTTPS : une requête `http://` sur ce port échoue.
+- Le port ne parle plus que HTTPS : une requête `http://` sur ce port échoue. Pour garder aussi du HTTP en clair,
+  voir « Choisir : sécurisé ou non » ci-dessous.
 - La CA ne peut signer que des adresses privées (10/8, 172.16/12, 192.168/16, 127/8) et les noms `localhost`,
   `*.local`, `*.lan` et celui de la machine (`nameConstraints`). Sa clé `ca.key` reste sur le PC (mode 600) :
   ne pas la copier.
@@ -162,6 +174,31 @@ Notes :
 - Pour tout recommencer (nouvelle CA, à réinstaller sur la tablette) : supprimer `~/.config/mediadeck/tls/` et les
   trois lignes `tls_*` de `config.toml`, puis `make cert`.
 
+### Choisir : sécurisé ou non
+
+Deux modes d'accès, au choix de la tablette, et qui peuvent coexister :
+
+| Mode | Adresse | Pour | Limites |
+|---|---|---|---|
+| **Non sécurisé** (HTTP) | `http://<ip>:<port>` | rien à installer ; marche avec tous les navigateurs | trafic et jeton en clair sur le LAN ; pas de Wake Lock ni de PWA |
+| **Sécurisé** (HTTPS) | `https://<ip>:<port>` | trafic chiffré, Wake Lock, PWA | la CA doit être installée sur la tablette (voir plus haut) |
+
+| Configuration (`[server]`) | Résultat |
+|---|---|
+| ni `tls_*` ni `http_port` | HTTP seul sur `port` (par défaut) |
+| `tls_*` (`make cert`) | HTTPS seul sur `port` |
+| `tls_*` + `http_port = 8766` | HTTPS sur `port` **et** HTTP en clair sur `http_port` |
+
+Pour proposer les deux : `make cert` puis `make http-on` (écrit `http_port = 8766` ; `make http-on HTTP_PORT=9000`
+pour un autre port), ouvrir ce port si besoin (`make firewall HTTP_PORT=8766`), puis redémarrer le service
+(`systemctl --user restart mediadeck`, ou relancer `make run`). `make url` affiche alors **deux adresses et deux QR
+codes**, l'un « Secure », l'autre « Unsecured ». Chaque adresse est une origine distincte : le jeton se mémorise
+séparément pour chacune, et une PWA ne s'installe que depuis l'adresse HTTPS.
+
+Pour retirer le HTTP en clair : `make http-off` (HTTPS seul). Pour revenir au HTTP seul : retirer aussi les trois
+lignes `tls_*` de `config.toml` (les certificats restent dans `~/.config/mediadeck/tls/`). `/ca.crt` est servi sur les deux ports, ce qui permet de récupérer la CA sans
+avertissement de certificat depuis le port HTTP.
+
 ## Commandes make
 
 | Cible | Rôle |
@@ -169,9 +206,11 @@ Notes :
 | `make run` / `make dev` | lancer au premier plan (normal / verbeux) |
 | `make check` | valider la configuration |
 | `make token` | régénérer le jeton (les tablettes devront rescanner) |
+| `make qr` | ouvrir dans le navigateur du PC une page avec les QR codes à scanner (HTTPS, HTTP, CA) |
 | `make cert` | créer la CA locale et le certificat HTTPS, activer HTTPS |
+| `make http-on` / `make http-off` | ajouter / retirer le port HTTP en clair (non sécurisé) à côté du HTTPS |
 | `make status` / `make logs` | état et journal du service |
-| `make firewall` | ouvrir le port aux réseaux privés avec ufw |
+| `make firewall` | ouvrir le port aux réseaux privés avec ufw (`HTTP_PORT=8766` pour le port HTTP en clair) |
 | `make lint` / `make test` | pyright / tests unitaires |
 | `make service-uninstall`, `make uinput-remove`, `make distclean` | désinstallation |
 
@@ -183,7 +222,7 @@ Notes :
 - L'API `/api/*` des lanceurs exige le jeton en en-tête `Authorization` (pas de CSRF possible depuis un autre site) ; les commandes brutes y sont interdites sauf `allow_custom_command = true` dans le fichier de configuration.
 - Les messages WebSocket sont limités à 4 Ko ; les déplacements souris et défilements sont bornés.
 - uinput est autorisé par ACL logind (`uaccess`) pour l'utilisateur de la session active, et non par le groupe `input`, qui donnerait accès en lecture à tous les claviers.
-- Sans `make cert`, le trafic est en HTTP clair : réservé au LAN. Avec HTTPS, il est chiffré, mais le port ne doit toujours pas être exposé hors du LAN : pour un accès distant, passer par WireGuard.
+- Sans `make cert`, ou sur le port `http_port`, le trafic est en HTTP clair (jeton compris) : réservé au LAN de confiance. Avec HTTPS, il est chiffré, mais le port ne doit toujours pas être exposé hors du LAN : pour un accès distant, passer par WireGuard. `http_port` est désactivé par défaut.
 
 ## Limites connues
 

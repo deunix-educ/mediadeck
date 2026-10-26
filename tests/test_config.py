@@ -64,6 +64,26 @@ class ParseConfigTest(unittest.TestCase):
             with self.subTest(server=server), self.assertRaises(ConfigError):
                 parse_config({"server": {"token": TOKEN, **server}})
 
+    def test_http_port_is_off_by_default(self) -> None:
+        self.assertEqual(parse_config({"server": {"token": TOKEN}}).http_port, 0)
+
+    def test_http_port_next_to_tls(self) -> None:
+        server = {"token": TOKEN, "tls_cert": "/c.pem", "tls_key": "/k.key", "http_port": 8766}
+        self.assertEqual(parse_config({"server": server}).http_port, 8766)
+
+    def test_http_port_is_validated(self) -> None:
+        tls = {"tls_cert": "/c.pem", "tls_key": "/k.key"}
+        for server in (
+            {"http_port": 8766},  # sans TLS, `port` sert déjà du HTTP en clair
+            {**tls, "http_port": 8765},  # même port que le HTTPS
+            {**tls, "http_port": 70000},
+            {**tls, "http_port": -1},
+            {**tls, "http_port": "8766"},
+            {**tls, "http_port": True},
+        ):
+            with self.subTest(server=server), self.assertRaises(ConfigError):
+                parse_config({"server": {"token": TOKEN, **server}})
+
     def test_max_volume_bounds(self) -> None:
         with self.assertRaises(ConfigError):
             parse_config({"server": {"token": TOKEN}, "audio": {"max_volume": 3}})

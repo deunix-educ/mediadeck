@@ -13,6 +13,11 @@ port = 8765
 # tls_cert = "~/.config/mediadeck/tls/server.pem"
 # tls_key = "~/.config/mediadeck/tls/server.key"
 # tls_ca = "~/.config/mediadeck/tls/mediadeck-ca.crt"
+# Choix sécurisé / non sécurisé : avec HTTPS, ce port HTTP en clair (jeton non chiffré, LAN de confiance
+# uniquement) est ouvert EN PLUS de `port`. La tablette choisit : https://<ip>:8765 ou http://<ip>:8766.
+# 0 = désactivé. Exige tls_cert/tls_key (sans eux, `port` sert déjà du HTTP). `make http-on` / `make http-off`
+# écrivent ou retirent cette ligne.
+# http_port = 8766
 # Généré par `make config` / `make token` (32 octets aléatoires, URL-safe)
 token = "CHANGE_ME"
 

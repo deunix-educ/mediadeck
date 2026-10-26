@@ -16,7 +16,7 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
-from .config import CONFIG_DIR, Config, ConfigError
+from .config import CONFIG_DIR, Config, ConfigError, load_config
 
 TLS_DIR = CONFIG_DIR / "tls"
 CA_KEY = "ca.key"
@@ -164,6 +164,28 @@ def enable_tls(config_path: Path, cert: Path, key: Path, ca: Path) -> bool:
         raise ConfigError(f"no 'port' line found in {config_path}: add tls_cert, tls_key and tls_ca manually")
     config_path.write_text(updated)
     return True
+
+
+def set_http_port(config_path: Path, port: int) -> None:
+    """Écrit (port > 0) ou retire (0) `http_port` dans [server] ; restaure le fichier si le résultat est invalide."""
+    original = config_path.read_text()
+    if port:
+        line = f"http_port = {port}"
+        existing = r"(?m)^([ \t]*)http_port[ \t]*=.*$"
+        if re.search(existing, original):
+            updated = re.sub(existing, lambda match: match.group(1) + line, original, count=1)
+        else:
+            updated, count = re.subn(r"(?m)^port\s*=.*$", lambda match: f"{match.group(0)}\n{line}", original, count=1)
+            if count == 0:
+                raise ConfigError(f"no 'port' line found in {config_path}: add '{line}' under [server] manually")
+    else:
+        updated = re.sub(r"(?m)^[ \t]*http_port[ \t]*=.*\n?", "", original)
+    config_path.write_text(updated)
+    try:
+        load_config(config_path)
+    except ConfigError:
+        config_path.write_text(original)
+        raise
 
 
 def build_ssl_context(config: Config) -> ssl.SSLContext | None:

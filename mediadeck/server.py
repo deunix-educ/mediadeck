@@ -7,6 +7,8 @@ import hmac
 import json
 import logging
 import mimetypes
+import signal
+import ssl
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -267,6 +269,33 @@ class MediaDeckServer:
         while True:
             await asyncio.sleep(STATE_REFRESH_SECONDS)
             await self._broadcast()
+
+
+async def open_sites(app: web.Application, config: Config, ssl_context: ssl.SSLContext | None) -> web.AppRunner:
+    """Ouvre le port principal (HTTPS si un contexte TLS est fourni) et, si demandé, le port HTTP en clair."""
+    runner = web.AppRunner(app)
+    await runner.setup()
+    try:
+        await web.TCPSite(runner, config.host, config.port, ssl_context=ssl_context).start()
+        if config.http_port:
+            await web.TCPSite(runner, config.host, config.http_port).start()
+    except BaseException:
+        await runner.cleanup()
+        raise
+    return runner
+
+
+async def serve(app: web.Application, config: Config, ssl_context: ssl.SSLContext | None) -> None:
+    """Sert l'application jusqu'à SIGINT / SIGTERM, puis arrête proprement (on_shutdown)."""
+    runner = await open_sites(app, config, ssl_context)
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(signum, stop.set)
+    try:
+        await stop.wait()
+    finally:
+        await runner.cleanup()
 
 
 @web.middleware

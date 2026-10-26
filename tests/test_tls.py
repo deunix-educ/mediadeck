@@ -10,7 +10,7 @@ from pathlib import Path
 
 from mediadeck.__main__ import client_url
 from mediadeck.config import Config, ConfigError, load_config, parse_config
-from mediadeck.tls import build_ssl_context, enable_tls, generate_certificates, is_permitted
+from mediadeck.tls import build_ssl_context, enable_tls, generate_certificates, is_permitted, set_http_port
 
 TOKEN = "x" * 32
 LAN_IP = "192.168.1.104"
@@ -34,6 +34,12 @@ class ClientUrlTest(unittest.TestCase):
         self.assertTrue(client_url(parse_config({"server": server})).startswith(f"http://{LAN_IP}:8765/?token="))
         tls = {**server, "tls_cert": "/c.pem", "tls_key": "/k.key"}
         self.assertTrue(client_url(parse_config({"server": tls})).startswith(f"https://{LAN_IP}:8765/?token="))
+
+    def test_plain_url_uses_http_port(self) -> None:
+        server = {"token": TOKEN, "advertise_host": LAN_IP, "tls_cert": "/c.pem", "tls_key": "/k.key", "http_port": 8766}
+        config = parse_config({"server": server})
+        self.assertTrue(client_url(config, plain=True).startswith(f"http://{LAN_IP}:8766/?token="))
+        self.assertTrue(client_url(config).startswith(f"https://{LAN_IP}:8765/?token="))
 
 
 @unittest.skipUnless(shutil.which("openssl"), "openssl is required")
@@ -141,3 +147,45 @@ class EnableTlsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SetHttpPortTest(unittest.TestCase):
+    TLS = 'tls_cert = "/c.pem"\ntls_key = "/k.key"\n'
+
+    def _write(self, directory: str, body: str) -> Path:
+        path = Path(directory) / "config.toml"
+        path.write_text(f'[server]\nport = 8765\n{body}token = "{TOKEN}"\n')
+        path.chmod(0o600)
+        return path
+
+    def test_adds_replaces_and_removes_the_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write(tmp, self.TLS)
+            set_http_port(path, 8766)
+            self.assertEqual(load_config(path).http_port, 8766)
+            set_http_port(path, 9000)
+            self.assertEqual(load_config(path).http_port, 9000)
+            self.assertEqual(path.read_text().count("http_port"), 1)
+            set_http_port(path, 0)
+            self.assertEqual(load_config(path).http_port, 0)
+            self.assertNotIn("http_port", path.read_text())
+            self.assertEqual(path.stat().st_mode & 0o077, 0)
+
+    def test_commented_example_is_not_a_setting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write(tmp, self.TLS + "# http_port = 1234\n")
+            set_http_port(path, 8766)
+            self.assertEqual(load_config(path).http_port, 8766)
+            self.assertIn("# http_port = 1234", path.read_text())
+
+    def test_invalid_result_restores_the_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write(tmp, "")  # sans TLS : http_port est refusé
+            before = path.read_text()
+            with self.assertRaises(ConfigError):
+                set_http_port(path, 8766)
+            self.assertEqual(path.read_text(), before)
+            path = self._write(tmp, self.TLS)
+            with self.assertRaises(ConfigError):  # même port que le HTTPS
+                set_http_port(path, 8765)
+            self.assertNotIn("http_port", path.read_text())

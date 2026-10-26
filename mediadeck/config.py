@@ -49,6 +49,8 @@ class Config:
     tls_cert: Path | None = None
     tls_key: Path | None = None
     tls_ca: Path | None = None
+    # Port HTTP en clair ouvert en plus du HTTPS (0 = désactivé) : au choix de la tablette, sans HTTPS ni CA à installer
+    http_port: int = 0
     # Page d'administration des lanceurs ; les commandes brutes restent réservées au fichier de configuration
     admin_enabled: bool = True
     allow_custom_command: bool = False
@@ -139,6 +141,14 @@ def parse_config(data: dict[str, Any]) -> Config:
     if tls_ca is not None and tls_cert is None:
         raise ConfigError("server.tls_ca requires server.tls_cert and server.tls_key")
 
+    http_port = server.get("http_port", 0)
+    if not isinstance(http_port, int) or isinstance(http_port, bool) or not 0 <= http_port <= 65535:
+        raise ConfigError("server.http_port must be an integer between 0 (disabled) and 65535")
+    if http_port and tls_cert is None:
+        raise ConfigError("server.http_port requires TLS (without it, server.port already serves plain HTTP)")
+    if http_port == port:
+        raise ConfigError("server.http_port must differ from server.port")
+
     max_volume = audio.get("max_volume", 1.0)
     if not isinstance(max_volume, (int, float)) or not 0.1 <= float(max_volume) <= 1.5:
         raise ConfigError("audio.max_volume must be between 0.1 and 1.5")
@@ -166,6 +176,7 @@ def parse_config(data: dict[str, Any]) -> Config:
         tls_cert=tls_cert,
         tls_key=tls_key,
         tls_ca=tls_ca,
+        http_port=http_port,
         admin_enabled=admin_enabled,
         allow_custom_command=allow_custom_command,
         enable_text_input=enable_text_input,

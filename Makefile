@@ -11,9 +11,11 @@ UNIT_DIR := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/systemd/user
 UNIT := $(UNIT_DIR)/mediadeck.service
 UDEV_RULE := /etc/udev/rules.d/60-mediadeck-uinput.rules
 PORT ?= 8765
+# Port HTTP en clair facultatif (server.http_port), à ouvrir aussi : make firewall HTTP_PORT=8766
+HTTP_PORT ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help deps install config token url cert check run dev lint test uinput uinput-remove \
+.PHONY: help deps install config token url qr cert http-on http-off check run dev lint test uinput uinput-remove \
 	service-install service-uninstall status logs firewall clean distclean
 
 help: ## Affiche cette aide
@@ -52,8 +54,17 @@ token: ## Régénère le jeton d'accès (les tablettes devront rescanner le QR)
 url: $(PYTHON) ## Affiche l'URL tablette et son QR code
 	@$(PYTHON) -m mediadeck --url
 
+qr: $(PYTHON) ## Ouvre dans le navigateur du PC une page avec les QR codes à scanner
+	@$(PYTHON) -m mediadeck --qr
+
 cert: $(PYTHON) ## Crée la CA locale + le certificat HTTPS et active HTTPS (openssl)
 	@$(PYTHON) -m mediadeck --make-cert
+
+http-on: $(PYTHON) ## Ajoute un port HTTP en clair (non sécurisé) à côté du HTTPS (HTTP_PORT=8766)
+	@$(PYTHON) -m mediadeck --http-port $(or $(HTTP_PORT),8766)
+
+http-off: $(PYTHON) ## Retire le port HTTP en clair : HTTPS seul
+	@$(PYTHON) -m mediadeck --http-port 0
 
 check: $(PYTHON) ## Valide la configuration
 	$(PYTHON) -m mediadeck --check
@@ -104,10 +115,12 @@ logs: ## Journal du service (suivi)
 firewall: ## Ouvre le port aux réseaux privés si ufw est actif (sudo)
 	@if command -v ufw > /dev/null; then \
 		for net in 192.168.0.0/16 10.0.0.0/8 172.16.0.0/12; do \
-			sudo ufw allow from $$net to any port $(PORT) proto tcp comment mediadeck; \
+			for port in $(PORT) $(HTTP_PORT); do \
+				sudo ufw allow from $$net to any port $$port proto tcp comment mediadeck; \
+			done; \
 		done; \
 	else \
-		echo "ufw absent : ouvrir le port $(PORT)/tcp pour le LAN uniquement"; \
+		echo "ufw absent : ouvrir le port $(PORT) $(HTTP_PORT) (tcp) pour le LAN uniquement"; \
 	fi
 
 clean: ## Supprime les caches
