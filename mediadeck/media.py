@@ -178,6 +178,9 @@ class MediaLibrary:
 
     def locate(self, path: Path) -> Located | None:
         """Retrouve, à partir d'un chemin absolu (ex. xesam:url d'un lecteur), le fichier média d'une racine."""
+        return self._locate_real(path) or self._locate_through_link(path)
+
+    def _locate_real(self, path: Path) -> Located | None:
         try:
             real = path.resolve(strict=True)
         except (OSError, RuntimeError):
@@ -197,6 +200,21 @@ class MediaLibrary:
                 return Located(root.id, "/".join(parts), media_type, real)
         return None
 
+    def _locate_through_link(self, path: Path) -> Located | None:
+        """Fichier atteint par un lien dont la cible est hors des racines : le lecteur annonce le chemin tel qu'il l'a
+        reçu (voir ``open_path``), donc sous la racine."""
+        lexical = Path(os.path.normpath(path))
+        for root in self._roots.values():
+            try:
+                relative = lexical.relative_to(root.path)
+            except ValueError:
+                continue
+            try:
+                return self.resolve_file(root.id, "/".join(relative.parts))
+            except MediaError:
+                return None
+        return None
+
     def enrich(self, metadata: dict[str, Any]) -> None:
         """Complète les métadonnées d'un lecteur MPRIS qui joue un fichier de la bibliothèque : titre et image."""
         url = metadata.get("url")
@@ -212,24 +230,22 @@ class MediaLibrary:
             metadata["art"] = art
 
     def find_art(self, root_id: str, file: Path) -> Path | None:
-        """Image qui accompagne un fichier son ou vidéo : « nom.jpg », « nom-poster.jpg », puis cover/folder/poster…"""
-        root = self._roots.get(root_id)
-        if root is None:
+        """Image qui accompagne un fichier son ou vidéo : « nom.jpg », « nom-poster.jpg », puis cover/folder/poster…
+        Cherchée à côté du fichier réel (qui peut être hors de la racine quand le dossier est relié)."""
+        if root_id not in self._roots:
             return None
         stem = file.stem.casefold()
         wanted = [stem, f"{stem}-poster", f"{stem}-thumb", f"{stem}-cover", *ART_NAMES]
         best: tuple[int, Path] | None = None
         try:
-            base = root.path.resolve(strict=True)
             with os.scandir(file.parent) as iterator:
                 for entry in iterator:
                     name, extension = os.path.splitext(entry.name.casefold())
                     if extension not in ART_EXTENSIONS or name not in wanted or not entry.is_file():
                         continue
                     rank = wanted.index(name)
-                    candidate = Path(entry.path).resolve(strict=True)
-                    if _inside(base, candidate) and (best is None or rank < best[0]):
-                        best = (rank, candidate)
+                    if best is None or rank < best[0]:
+                        best = (rank, Path(entry.path).resolve(strict=True))
         except (OSError, RuntimeError):
             return None
         return best[1] if best else None
@@ -250,8 +266,10 @@ class MediaLibrary:
             raise MediaError("invalid path")
         return parts
 
-    def _resolve(self, root_id: Any, relative: Any) -> tuple[Path, list[str], Path]:
-        """Renvoie (racine réelle, composantes, chemin réel) ; refuse ce qui sort de la racine."""
+    def _resolve(self, root_id: Any, relative: Any) -> tuple[list[str], Path]:
+        """Renvoie (composantes, chemin réel). Les liens sont suivis où qu'ils pointent (dossiers rangés sur un autre
+        disque et reliés depuis la racine) ; le client n'envoie jamais de chemin absolu ni de composante ``..`` ou
+        cachée (voir ``_parts``), donc seuls les liens posés par l'utilisateur dans ses dossiers mènent hors de la racine."""
         root = self._roots.get(root_id) if isinstance(root_id, str) else None
         if root is None:
             raise MediaNotFound("unknown media folder")
@@ -264,13 +282,11 @@ class MediaLibrary:
             real = base.joinpath(*parts).resolve(strict=True)
         except (OSError, RuntimeError) as exc:
             raise MediaNotFound("not found") from exc
-        if not _inside(base, real):
-            raise MediaError("outside of the media folder")
-        return base, parts, real
+        return parts, real
 
     def list(self, root_id: Any, relative: Any = "") -> dict[str, Any]:
         """Contenu d'un dossier : sous-dossiers puis fichiers médias, triés par ordre naturel (appel bloquant)."""
-        base, parts, directory = self._resolve(root_id, relative)
+        parts, directory = self._resolve(root_id, relative)
         if not directory.is_dir():
             raise MediaError("not a folder")
         folders: list[tuple[str, str, int]] = []
@@ -282,7 +298,7 @@ class MediaLibrary:
                     scanned += 1
                     if scanned > MAX_SCANNED:
                         break
-                    kind = self._classify(base, entry)
+                    kind = self._classify(entry)
                     if kind == "dir":
                         folders.append((entry.name, kind, 0))
                     elif kind is not None:
@@ -314,8 +330,9 @@ class MediaLibrary:
         return {"name": name, "kind": kind, "v": version} if kind == "image" else {"name": name, "kind": kind}
 
     @staticmethod
-    def _classify(base: Path, entry: os.DirEntry[str]) -> str | None:
-        """« dir », un type de média, ou None si l'entrée ne doit pas être proposée."""
+    def _classify(entry: os.DirEntry[str]) -> str | None:
+        """« dir », un type de média, ou None si l'entrée ne doit pas être proposée. Les liens sont suivis ; pour un
+        fichier c'est la cible qui décide du type (``lien.mp3`` vers un script n'est jamais proposé)."""
         name = entry.name
         if name.startswith("."):
             return None
@@ -324,23 +341,19 @@ class MediaLibrary:
         except UnicodeEncodeError:
             return None  # nom non décodable : impossible à renvoyer proprement en JSON
         try:
-            is_dir = entry.is_dir()
-            is_file = not is_dir and entry.is_file()
+            if entry.is_dir():
+                return "dir"
+            if not entry.is_file():
+                return None  # y compris un lien cassé ou une boucle de liens
             if entry.is_symlink():
-                # Un lien doit rester dans la racine ; pour un fichier, c'est la cible qui décide du type
-                target = Path(entry.path).resolve(strict=True)
-                if not _inside(base, target):
-                    return None
-                return "dir" if is_dir else EXTENSION_TYPES.get(target.suffix.lower()) if is_file else None
+                return EXTENSION_TYPES.get(Path(entry.path).resolve(strict=True).suffix.lower())
         except (OSError, RuntimeError):
             return None
-        if is_dir:
-            return "dir"
-        return EXTENSION_TYPES.get(os.path.splitext(name)[1].lower()) if is_file else None
+        return EXTENSION_TYPES.get(os.path.splitext(name)[1].lower())
 
     def resolve_file(self, root_id: Any, relative: Any) -> Located:
         """Fichier média désigné par (racine, chemin relatif). Le type vient de l'extension du fichier réel."""
-        _base, parts, real = self._resolve(root_id, relative)
+        parts, real = self._resolve(root_id, relative)
         if not parts or not real.is_file():
             raise MediaError("not a file")
         media_type = EXTENSION_TYPES.get(real.suffix.lower())
@@ -352,6 +365,12 @@ class MediaLibrary:
         """Fichier média à ouvrir : (chemin réel, type)."""
         located = self.resolve_file(root_id, relative)
         return located.real, located.type
+
+    def open_path(self, located: Located) -> Path:
+        """Chemin à donner au lecteur : celui de la racine, liens conservés (``Vidéos/Cinema/film.mkv``). Le lecteur
+        l'annonce tel quel par MPRIS, ce qui permet de retrouver le fichier (titre, image) ; la cible réelle, elle,
+        est hors de toute racine quand le dossier est relié."""
+        return self._roots[located.root].path.joinpath(*located.relative.split("/"))
 
     @staticmethod
     def _search_words(query: Any) -> list[str]:
@@ -366,28 +385,37 @@ class MediaLibrary:
         """Recherche par nom (sans accents ni casse, tous les mots) dans un dossier et ses sous-dossiers, ou dans
         toutes les racines si ``root_id`` est absent. Bornée en résultats, en examens et en durée (appel bloquant)."""
         words = self._search_words(query)
-        starts: list[tuple[str, Path, Path]] = []  # (racine, base réelle, dossier de départ)
+        starts: list[tuple[str, tuple[str, ...], Path]] = []  # (racine, chemin logique de départ, dossier réel)
         if root_id in (None, ""):
             for root in self._roots.values():
                 try:
-                    base = root.path.resolve(strict=True)
+                    starts.append((root.id, (), root.path.resolve(strict=True)))
                 except (OSError, RuntimeError):
                     continue
-                starts.append((root.id, base, base))
         else:
-            base, _parts, directory = self._resolve(root_id, relative)
+            parts, directory = self._resolve(root_id, relative)
             if not directory.is_dir():
                 raise MediaError("not a folder")
-            starts.append((str(root_id), base, directory))
+            starts.append((str(root_id), tuple(parts), directory))
 
         deadline = time.monotonic() + SEARCH_SECONDS
         results: list[dict[str, Any]] = []
         scanned = 0
         truncated = False
-        for rid, base, start in starts:
-            stack = [start]
+        for rid, first, start in starts:
+            # Les liens sont suivis ; un dossier déjà parcouru (boucle, second lien vers le même dossier) est ignoré.
+            # Les résultats gardent le chemin logique (par le lien), celui que l'interface sait rouvrir.
+            visited: set[tuple[int, int]] = set()
+            stack = [(first, start)]
             while stack and not truncated:
-                directory = stack.pop()
+                logical, directory = stack.pop()
+                try:
+                    info = os.stat(directory)
+                except OSError:
+                    continue
+                if (info.st_dev, info.st_ino) in visited:
+                    continue
+                visited.add((info.st_dev, info.st_ino))
                 try:
                     with os.scandir(directory) as iterator:
                         for entry in iterator:
@@ -395,16 +423,15 @@ class MediaLibrary:
                             if scanned > MAX_SEARCH_SCANNED or time.monotonic() > deadline:
                                 truncated = True
                                 break
-                            kind = self._classify(base, entry)
+                            kind = self._classify(entry)
                             if kind is None:
                                 continue
-                            if kind == "dir" and not entry.is_symlink():
-                                stack.append(Path(entry.path))  # les liens ne sont pas suivis : pas de boucle possible
+                            if kind == "dir":
+                                stack.append(((*logical, entry.name), Path(entry.path)))
                             folded = _fold(entry.name)
                             if all(word in folded for word in words):
-                                folder = Path(directory).relative_to(base).parts
                                 found = self._entry(entry.name, kind, self._version(entry) if kind == "image" else 0)
-                                results.append({**found, "root": rid, "folder": "/".join(folder)})
+                                results.append({**found, "root": rid, "folder": "/".join(logical)})
                 except OSError:
                     continue  # dossier illisible : on passe au suivant
         results.sort(

@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from aiohttp import web
@@ -13,6 +14,8 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from mediadeck import media
 from mediadeck.config import parse_config
+from mediadeck.launchers import LauncherStore
+from mediadeck.system import SystemControl
 from mediadeck.media import Located, MediaApi, MediaError, MediaLibrary, MediaNotFound, thumb_url, user_media_dirs
 from mediadeck.thumbs import Thumbnailer
 
@@ -137,18 +140,39 @@ class EscapeTest(LibraryCase):
         with self.assertRaises(MediaError):
             self.library.list("musique", "a/" * 600 + "a")
 
-    def test_symlinks_leaving_the_root_are_neither_listed_nor_reachable(self) -> None:
+    def test_symlinks_leaving_the_root_are_followed(self) -> None:
+        # Un dossier de médias rangé ailleurs (autre disque) et relié depuis la racine : cas courant
         os.symlink(self.outside, self.root / "dehors")  # dossier
         os.symlink(self.outside / "private.mp3", self.root / "lien.mp3")  # fichier
         touch(self.root / "ok.mp3")
-        self.assertEqual(self.names(self.library.list("musique", "")), [("ok.mp3", "audio")])
-        for path in ("dehors", "dehors/private.mp3"):
-            with self.subTest(path=path), self.assertRaisesRegex(MediaError, "outside"):
-                self.library.list("musique", path)
-        with self.assertRaisesRegex(MediaError, "outside"):
+        self.assertEqual(
+            self.names(self.library.list("musique", "")),
+            [("dehors", "dir"), ("lien.mp3", "audio"), ("ok.mp3", "audio")],
+        )
+        self.assertEqual(self.names(self.library.list("musique", "dehors")), [("private.mp3", "audio")])
+        self.assertEqual(self.library.file("musique", "lien.mp3"), (self.outside / "private.mp3", "audio"))
+        self.assertEqual(self.library.file("musique", "dehors/private.mp3"), (self.outside / "private.mp3", "audio"))
+
+    def test_a_link_never_lets_a_non_media_file_through(self) -> None:
+        os.symlink(self.outside / "private.sh", self.root / "lien.mp3")
+        os.symlink(self.outside, self.root / "dehors")
+        self.assertEqual(self.names(self.library.list("musique", "dehors")), [("private.mp3", "audio")])  # pas le .sh
+        with self.assertRaisesRegex(MediaError, "not a media file"):
             self.library.file("musique", "lien.mp3")
-        with self.assertRaisesRegex(MediaError, "outside"):
-            self.library.file("musique", "dehors/private.mp3")
+        with self.assertRaisesRegex(MediaError, "not a media file"):
+            self.library.file("musique", "dehors/private.sh")
+
+    def test_links_do_not_open_the_door_to_dots_or_absolute_paths(self) -> None:
+        os.symlink(self.outside, self.root / "dehors")
+        for path in ("dehors/../x.mp3", "../secret/private.mp3", "dehors/.cache/a.mp3", "/etc/passwd"):
+            with self.subTest(path=path), self.assertRaises(MediaError):
+                self.library.file("musique", path)
+
+    def test_open_path_keeps_the_link_so_that_players_report_a_path_of_the_root(self) -> None:
+        os.symlink(self.outside, self.root / "dehors")
+        located = self.library.resolve_file("musique", "dehors/private.mp3")
+        self.assertEqual(located.real, self.outside / "private.mp3")
+        self.assertEqual(self.library.open_path(located), self.root / "dehors" / "private.mp3")
 
     def test_symlinks_inside_the_root_are_followed(self) -> None:
         touch(self.root / "Vrai" / "a.mp3")
@@ -295,13 +319,17 @@ class SearchTest(LibraryCase):
         self.assertEqual(self.found(self.library.search("été indien", "musique")), [("Jazz", "Ete indien.mp3", "audio")])
         self.assertEqual(self.found(self.library.search("indien 1980", "musique")), [])
 
-    def test_non_media_hidden_and_escaping_entries_are_never_found(self) -> None:
-        os.symlink(self.outside, self.root / "dehors-ete")
-        os.symlink(self.outside / "private.mp3", self.root / "lien-ete.mp3")
-        result = self.found(self.library.search("ete", "musique"))
-        names = [name for _folder, name, _kind in result]
-        for forbidden in ("été.txt", "ete.mp3", ".ete-cache.mp3", "dehors-ete", "lien-ete.mp3", "private.mp3"):
+    def test_non_media_and_hidden_entries_are_never_found(self) -> None:
+        names = [name for _folder, name, _kind in self.found(self.library.search("ete", "musique"))]
+        for forbidden in ("été.txt", "ete.mp3", ".ete-cache.mp3"):
             self.assertNotIn(forbidden, names)
+
+    def test_linked_folders_are_searched_and_reported_under_their_link(self) -> None:
+        touch(self.outside / "ete-ailleurs.mp3")
+        os.symlink(self.outside, self.root / "Archive")
+        result = self.found(self.library.search("ete-ailleurs", "musique"))
+        self.assertEqual(result, [("Archive", "ete-ailleurs.mp3", "audio")])
+        self.assertEqual(self.library.file("musique", "Archive/ete-ailleurs.mp3")[1], "audio")  # le résultat est ouvrable
 
     def test_search_is_scoped_to_the_folder_and_its_subfolders(self) -> None:
         self.assertEqual(self.found(self.library.search("ete", "musique", "Rock")), [("Rock/Live", "Été 1980.mp3", "audio")])
@@ -324,10 +352,13 @@ class SearchTest(LibraryCase):
         self.assertEqual(result["entries"], [
             {"name": "ete-2020.JPG", "kind": "image", "v": 1_700_000_000, "root": "musique", "folder": "Photos"}])
 
-    def test_symlinked_folders_are_not_followed(self) -> None:
+    def test_link_loops_do_not_hang_or_duplicate_results(self) -> None:
         os.symlink(self.root, self.root / "Rock" / "boucle")  # boucle vers la racine
-        result = self.library.search("studio", "musique")
-        self.assertEqual(self.found(result), [("Rock", "studio.flac", "audio")])
+        os.symlink(self.root / "Rock", self.root / "Rock" / "Live" / "retour")  # boucle vers un ancêtre
+        os.symlink(self.root / "Rock", self.root / "doublon")  # même dossier par un second chemin
+        result = self.found(self.library.search("studio", "musique"))
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0][1:], ("studio.flac", "audio"))
 
     def test_invalid_queries(self) -> None:
         for query in (None, 5, "", "a", " é ", "x" * 101, "a b c d e f g h i"):
@@ -355,6 +386,14 @@ class LocateAndArtTest(LibraryCase):
         again = self.library.locate(self.root / "alias.mp3")
         assert again is not None
         self.assertEqual(again.relative, "Rock/été.mp3")
+
+    def test_locate_a_file_reached_through_a_link_leaving_the_root(self) -> None:
+        # Le lecteur annonce le chemin tel qu'on le lui a donné (par le lien), pas la cible réelle
+        os.symlink(self.outside, self.root / "dehors")
+        located = self.library.locate(self.root / "dehors" / "private.mp3")
+        assert located is not None
+        self.assertEqual((located.root, located.relative), ("musique", "dehors/private.mp3"))
+        self.assertIsNone(self.library.locate(self.root / "dehors" / "private.sh"))
 
     def test_locate_refuses_everything_else(self) -> None:
         touch(self.root / "notes.txt")
@@ -413,13 +452,53 @@ class LocateAndArtTest(LibraryCase):
         self.assertEqual(self.library.find_art("musique", file), self.root / "Film" / "Mon film.jpg")
         self.assertIsNone(self.library.find_art("nope", file))
 
-    def test_find_art_never_follows_a_link_out_of_the_root(self) -> None:
-        file = touch(self.root / "a.mp3")
-        os.symlink(self.outside / "private.mp3", self.root / "cover.jpg")
-        self.assertIsNone(self.library.find_art("musique", file))
+    def test_find_art_in_a_folder_reached_through_a_link(self) -> None:
+        # Le fichier réel est hors de la racine (dossier relié) : son affiche voisine reste trouvée
+        film = touch(self.outside / "Film" / "Mon film.mkv")
+        poster = touch(self.outside / "Film" / "poster.jpg")
+        self.assertEqual(self.library.find_art("musique", film), poster)
 
     def test_thumb_url_is_quoted(self) -> None:
         self.assertEqual(thumb_url("r", "a b/é&c.jpg", 160, 7), "/thumb?root=r&path=a%20b/%C3%A9%26c.jpg&size=160&v=7")
+
+
+class OpenMediaTest(unittest.IsolatedAsyncioTestCase):
+    """Le chemin donné au lecteur est celui de la racine, liens conservés."""
+
+    async def asyncSetUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        base = Path(self._tmp.name).resolve()
+        self.root = base / "Videos"
+        self.disk = base / "autre-disque"
+        touch(self.disk / "Cinema" / "film.mkv")
+        self.root.mkdir()
+        os.symlink(self.disk / "Cinema", self.root / "Cinema")
+        self.store = LauncherStore(base / "launchers.db")
+        self.library = MediaLibrary([self.root])
+        self.control = SystemControl(None, self.store, self.library, False, True, lambda: None)  # type: ignore[arg-type]
+        self.commands: list[list[str]] = []
+
+        async def record(command: list[str]) -> None:
+            self.commands.append(command)
+
+        self.control._spawn = record  # type: ignore[method-assign]
+
+    async def asyncTearDown(self) -> None:
+        self.store.close()
+        self._tmp.cleanup()
+
+    async def test_a_file_behind_a_link_is_opened_by_its_path_in_the_root(self) -> None:
+        payload: dict[str, Any] = {"root": "videos", "path": "Cinema/film.mkv"}
+        await self.control.execute("open_media", payload)
+        self.assertEqual(self.commands, [["gio", "open", str(self.root / "Cinema" / "film.mkv")]])
+        last = self.library.snapshot()["last"]
+        self.assertEqual((last["name"], last["type"]), ("film", "video"))
+
+    async def test_nothing_is_opened_for_a_refused_path(self) -> None:
+        for path in ("../x.mkv", "Cinema/absent.mkv", "/etc/passwd", "Cinema"):
+            with self.subTest(path=path), self.assertRaises(MediaError):
+                await self.control.execute("open_media", {"root": "videos", "path": path})
+        self.assertEqual(self.commands, [])
 
 
 class SearchAndThumbApiTest(unittest.IsolatedAsyncioTestCase):

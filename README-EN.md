@@ -131,15 +131,17 @@ PC**; the tablet stays a remote control.
   | **Command** (e.g. `mpv --fs`) | `mpv --fs <file>` | anything: needs `allow_custom_command = true` |
 
 - **Security**: the client never sends an absolute path, only a root folder and a relative path. The server refuses
-  `..`, absolute paths, hidden entries (`.x`) and anything symbolic links would take out of the root. Only known media
-  extensions are listed and opened (never a script, even renamed `.mp3` or linked to a `.sh`). `GET /api/media`
+  `..`, absolute paths and hidden entries (`.x`). **Symbolic links are followed wherever they point**: a folder kept on
+  another disk is simply linked from the configured folder (`ln -s /disk/Films ~/Videos/Films`). Your own links
+  therefore decide what can be seen from the tablet. Only known media extensions are listed and opened (never a script,
+  even renamed `.mp3` or linked to a `.sh`). `GET /api/media`
   requires the token in the `Authorization` header; thumbnails (`/thumb`) have it in the URL, like `/art`, because an
   image tag sends no header. `ffmpeg` runs with no standard input, limited to local files, with a timeout and at most
   three processes; an image is read by the image decoder only (a playlist disguised as `.jpg` yields nothing). A folder shows at most 1000 entries. The token gives access to the
   **names** of the files in these folders: only configure what may be seen from the tablet.
 - **Search**: the "Search…" field looks in file and folder **names** (ignoring accents and case, every word must appear)
   in the folder shown and its subfolders, or in all folders from the first level. Results show their folder; a tap
-  opens the file or folder. At most 300 results and 4 seconds; symbolic links are not followed.
+  opens the file or folder. At most 300 results and 4 seconds; links are followed, without scanning a folder twice (no loops).
 - **Thumbnails**: images (jpg, png, gif, webp, bmp, tiff; not HEIC or AVIF) are shown as thumbnails, made by `ffmpeg`
   (`apt install ffmpeg`, installed by `make deps`) and kept in `~/.cache/mediadeck/thumbs` (3000 files at most).
   Without ffmpeg, or for an unreadable image, the icon stays. `[media] thumbnails = false` turns them off.

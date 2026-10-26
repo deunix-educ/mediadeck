@@ -131,9 +131,11 @@ Un appui sur un fichier l'**ouvre sur le PC** ; la tablette reste une télécomm
   | **Commande** (ex. `mpv --fs`) | `mpv --fs <fichier>` | tout : réservé à `allow_custom_command = true` |
 
 - **Sécurité** : le client n'envoie jamais de chemin absolu, seulement un dossier racine et un chemin relatif. Le
-  serveur refuse `..`, les chemins absolus, les entrées cachées (`.x`) et tout ce que les liens symboliques
-  feraient sortir de la racine. Seules les extensions de médias connues sont listées et ouvertes (jamais un script,
-  même renommé en `.mp3` ou lié vers un `.sh`). L'API `GET /api/media` exige le jeton en en-tête `Authorization` ; les
+  serveur refuse `..`, les chemins absolus et les entrées cachées (`.x`). Les **liens symboliques sont suivis, où qu'ils
+  pointent** : un dossier rangé sur un autre disque se relie simplement depuis le dossier configuré
+  (`ln -s /disque/Films ~/Vidéos/Films`). Ce sont donc vos propres liens qui décident de ce qui est visible depuis la
+  tablette. Seules les extensions de médias connues sont listées et ouvertes (jamais un script, même renommé en `.mp3` ou
+  lié vers un `.sh`). L'API `GET /api/media` exige le jeton en en-tête `Authorization` ; les
   miniatures (`/thumb`) l'ont dans l'URL, comme `/art`, car une balise image n'envoie pas d'en-tête. `ffmpeg` est lancé sans
   entrée standard, limité aux fichiers locaux, avec un délai et trois processus au plus ; une image est lue par le seul
   décodeur d'image (une liste de lecture déguisée en `.jpg` ne donne rien).
@@ -142,7 +144,7 @@ Un appui sur un fichier l'**ouvre sur le PC** ; la tablette reste une télécomm
 - **Recherche** : le champ « Rechercher… » cherche dans les **noms** (sans tenir compte des accents ni de la casse, tous
   les mots doivent y figurer) dans le dossier affiché et ses sous-dossiers, ou dans tous les dossiers depuis le
   premier niveau. Les résultats indiquent leur dossier ; un appui ouvre le fichier ou le dossier. Au plus 300
-  résultats, 4 secondes ; les liens symboliques ne sont pas suivis.
+  résultats, 4 secondes ; les liens sont suivis, sans parcourir deux fois le même dossier (pas de boucle).
 - **Miniatures** : les images (jpg, png, gif, webp, bmp, tiff ; pas HEIC ni AVIF) s'affichent en miniature, fabriquées par
   `ffmpeg` (`apt install ffmpeg`, installé par `make deps`) et gardées dans `~/.cache/mediadeck/thumbs` (3000 fichiers
   au plus). Sans ffmpeg, ou pour une image illisible, l'icône reste. `[media] thumbnails = false` les désactive.

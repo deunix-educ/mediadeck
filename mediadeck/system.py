@@ -104,7 +104,7 @@ class SystemControl:
         """Ouvre un fichier de l'onglet Médias avec le lecteur de son type ; le chemin est résolu côté serveur."""
         located = await asyncio.to_thread(self._media.resolve_file, root, path)
         opener = self._launchers.openers()[located.type]
-        command = build_open_argv(opener, located.real)
+        command = build_open_argv(opener, self._media.open_path(located))
         log.info("opening %s file with %s: %s", located.type, opener.kind, command)
         await self._spawn(command)
         # L'onglet Lecture montre le titre et l'image du dernier fichier ouvert, même sans lecteur MPRIS
