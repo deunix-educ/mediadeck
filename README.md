@@ -41,6 +41,7 @@ KDE Connect n'est pas nécessaire : il peut rester installé pour ses autres fon
 make deps             # paquets système (sudo) : venv, gcc, pactl, qrencode, ffmpeg
 make install          # .venv + dépendances Python
 make config           # ~/.config/mediadeck/config.toml (mode 600) avec un jeton aléatoire
+                      # PC avec un VPN : renseigner `advertise_host` ICI, avant `make cert` (voir ci-dessous)
 make cert             # accès sécurisé (HTTPS) : CA locale + certificat, activés dans config.toml
 make http-on          # facultatif : garde aussi un accès HTTP en clair (port 8766)
 make uinput           # règle udev « uaccess » pour /dev/uinput (sudo)
@@ -59,6 +60,21 @@ redémarrer le service (`systemctl --user restart mediadeck`).
 - **Accès non sécurisé (HTTP)** : rien à installer, mais le jeton circule en clair sur le réseau local. Sans `make cert`,
   c'est le seul mode ; avec `make cert` puis `make http-on`, les deux coexistent (voir « Choisir : sécurisé ou non »).
 - Si le pare-feu `ufw` est actif : `make firewall` (ajouter `HTTP_PORT=8766` si le HTTP en clair est activé).
+- **PC avec un VPN (WireGuard, Proton VPN…) : renseigner `advertise_host`.** `make url`, `make qr` et `make cert`
+  déduisent l'adresse du PC de la route par défaut ; avec un VPN actif, elle passe par le tunnel (`wg0`, `tun0`,
+  `proton0`… ; par exemple `10.2.0.2`) et l'adresse annoncée n'est pas joignable par la tablette. Le certificat HTTPS
+  serait en plus émis pour cette mauvaise adresse. Avant `make cert`, indiquer dans `~/.config/mediadeck/config.toml`
+  l'adresse du PC **sur le réseau local**, hors tunnel :
+
+  ```toml
+  [server]
+  advertise_host = "192.168.1.104"
+  ```
+
+  Pour la trouver : `ip -4 -br addr` et prendre l'adresse de l'interface physique (`enp…`, `eno…`, `wlp…`), pas celle
+  d'un tunnel ni d'un pont Docker. Si `make cert` a déjà été lancé avec une mauvaise adresse, corriger puis relancer
+  `make cert` : la CA reste la même, rien à refaire sur la tablette. Si la tablette n'atteint toujours pas le PC,
+  autoriser les connexions au réseau local dans l'application VPN du PC.
 
 Sur la tablette : scanner le QR code, puis menu du navigateur → « Ajouter à l'écran d'accueil ».
 Le jeton est mémorisé puis retiré de la barre d'adresse.
@@ -74,7 +90,7 @@ Le service doit tourner **dans la session graphique** : il a besoin du bus D-Bus
 host = "0.0.0.0"
 port = 8765
 token = "…"            # make token pour le régénérer
-advertise_host = "192.168.1.104"   # optionnel : adresse du QR code (sinon détection automatique)
+advertise_host = "192.168.1.104"   # adresse du QR code et du certificat (sinon détection) ; à renseigner si le PC a un VPN
 tls_cert = "~/.config/mediadeck/tls/server.pem"       # écrits par `make cert` (HTTPS)
 tls_key = "~/.config/mediadeck/tls/server.key"
 tls_ca = "~/.config/mediadeck/tls/mediadeck-ca.crt"   # servi sur /ca.crt pour la tablette

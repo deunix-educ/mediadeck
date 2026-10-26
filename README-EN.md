@@ -41,6 +41,7 @@ KDE Connect is not required; it can stay installed for its other features.
 make deps             # system packages (sudo): venv, gcc, pactl, qrencode, ffmpeg
 make install          # .venv + Python dependencies
 make config           # ~/.config/mediadeck/config.toml (mode 600) with a random token
+                      # PC with a VPN: set `advertise_host` HERE, before `make cert` (see below)
 make cert             # secure access (HTTPS): local CA + certificate, enabled in config.toml
 make http-on          # optional: also keep an unencrypted HTTP access (port 8766)
 make uinput           # "uaccess" udev rule for /dev/uinput (sudo)
@@ -60,6 +61,21 @@ Run every `make` command **from the project folder** (the one containing the `Ma
   `make cert` it is the only mode; with `make cert` then `make http-on`, both coexist (see "Choosing: secure or
   unsecured").
 - If the `ufw` firewall is active: `make firewall` (add `HTTP_PORT=8766` if plain HTTP is enabled).
+- **PC with a VPN (WireGuard, Proton VPN…): set `advertise_host`.** `make url`, `make qr` and `make cert` work out
+  the PC's address from the default route; with an active VPN that route goes through the tunnel (`wg0`, `tun0`,
+  `proton0`…; for example `10.2.0.2`), so the advertised address cannot be reached by the tablet. The HTTPS
+  certificate would also be issued for that wrong address. Before `make cert`, put the PC's address **on the local
+  network**, outside any tunnel, in `~/.config/mediadeck/config.toml`:
+
+  ```toml
+  [server]
+  advertise_host = "192.168.1.104"
+  ```
+
+  To find it: `ip -4 -br addr` and take the address of the physical interface (`enp…`, `eno…`, `wlp…`), not a
+  tunnel's or a Docker bridge's. If `make cert` was already run with a wrong address, fix it and rerun `make cert`:
+  the CA stays the same, nothing to redo on the tablet. If the tablet still cannot reach the PC, allow local network
+  connections in the PC's VPN application.
 
 On the tablet: scan the QR code, then browser menu → "Add to Home screen".
 The token is stored, then removed from the address bar.
@@ -75,7 +91,7 @@ The service must run **inside the graphical session**: it needs the user's sessi
 host = "0.0.0.0"
 port = 8765
 token = "…"            # make token to regenerate it
-advertise_host = "192.168.1.104"   # optional: address used in the QR code (auto-detected otherwise)
+advertise_host = "192.168.1.104"   # address of the QR code and certificate (auto-detected otherwise); set it if the PC has a VPN
 tls_cert = "~/.config/mediadeck/tls/server.pem"       # written by `make cert` (HTTPS)
 tls_key = "~/.config/mediadeck/tls/server.key"
 tls_ca = "~/.config/mediadeck/tls/mediadeck-ca.crt"   # served on /ca.crt for the tablet

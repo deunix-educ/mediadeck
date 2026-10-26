@@ -5,8 +5,10 @@
 # 0.0.0.0 = toutes les interfaces ; préférer l'IP LAN du PC si possible
 host = "0.0.0.0"
 port = 8765
-# Adresse affichée dans l'URL et le QR code (`make url`) ; à renseigner si la détection
-# automatique choisit une mauvaise interface (VPN, Docker…). Nom d'hôte ou IPv4.
+# Adresse affichée dans l'URL et le QR code (`make url`) et pour laquelle `make cert` émet le certificat HTTPS.
+# À RENSEIGNER AVANT `make cert` si le PC utilise un VPN (WireGuard, Proton VPN…) ou Docker : la détection
+# automatique suit la route par défaut, qui passe alors par le tunnel (ex. 10.2.0.2), injoignable par la tablette.
+# Mettre l'adresse du PC sur le réseau local (`ip -4 -br addr`, interface enp…/eno…/wlp…). Nom d'hôte ou IPv4.
 # advertise_host = "192.168.1.104"
 # HTTPS : `make cert` crée une CA locale + un certificat et renseigne ces trois lignes.
 # La tablette doit installer la CA une fois (https://<ip>:<port>/ca.crt).
