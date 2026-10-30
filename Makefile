@@ -15,7 +15,7 @@ PORT ?= 8765
 HTTP_PORT ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help deps install config token url qr cert http-on http-off check run dev lint test test-integration uinput uinput-remove \
+.PHONY: help deps install config token url qr cert http-on http-off check run dev lint test test-integration test-ui uinput uinput-remove \
 	service-install service-uninstall status logs firewall clean distclean
 
 help: ## Affiche cette aide
@@ -83,6 +83,9 @@ test: $(PYTHON) ## Tests unitaires
 
 test-integration: $(PYTHON) ## Scénario complet : serveur + bus D-Bus privé + faux lecteur, gio et pactl
 	$(PYTHON) -m unittest discover -s tests -p 'test_integration.py' -v
+
+test-ui: $(PYTHON) ## Interface dans Chromium (mise en page, onglet Médias, lanceurs, /admin) ; ignoré sans chromium
+	$(PYTHON) -m unittest discover -s tests -p 'test_ui*.py' -v
 
 uinput: ## Autorise /dev/uinput pour la session active (sudo, règle udev uaccess)
 	sudo install -m 644 udev/60-mediadeck-uinput.rules $(UDEV_RULE)

@@ -23,15 +23,13 @@ class TextButtonTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.server = TestServer(make_app())
         await self.server.start_server()
+        self.addAsyncCleanup(self.server.close)  # enregistrés ici : asyncTearDown n'est pas appelé si asyncSetUp échoue
         self.browser = Browser()
+        self.addAsyncCleanup(self.browser.close)
         await self.browser.start()
         await self.browser.open(f"http://127.0.0.1:{self.server.port}/?token=player", 1280, 800)
         await self.browser.wait_for("document.getElementById('track-title').textContent !== ''")
         await self.browser.evaluate("document.querySelector('[data-tab=remote]').click()")
-
-    async def asyncTearDown(self) -> None:
-        await self.browser.close()
-        await self.server.close()
 
     async def test_tapping_the_greyed_button_shows_the_reason_and_opens_nothing(self) -> None:
         state = json.loads(await self.browser.evaluate(STATE))

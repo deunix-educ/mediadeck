@@ -299,6 +299,7 @@ without a certificate warning.
 | `make status` / `make logs` | service status and journal |
 | `make firewall` | open the port to private networks with ufw (`HTTP_PORT=8766` for the plain HTTP port) |
 | `make lint` / `make test` | pyright / unit tests |
+| `make test-ui` | UI in Chromium (layout, Media tab, launchers, `/admin`); skipped without `chromium`; also part of `make test` |
 | `make test-integration` | full scenario (server, private D-Bus bus, fake player, fake `gio` and `pactl`); also part of `make test` |
 | `make service-uninstall`, `make uinput-remove`, `make distclean` | uninstall |
 

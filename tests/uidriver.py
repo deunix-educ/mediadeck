@@ -82,13 +82,17 @@ class Browser:
         self._session: aiohttp.ClientSession | None = None
         self._socket: aiohttp.ClientWebSocketResponse | None = None
         self._next_id = 0
+        self.exceptions: list[str] = []  # exceptions JavaScript non rattrapées, signalées par la page
 
     async def start(self) -> None:
         assert CHROMIUM
         self._process = subprocess.Popen(
-            [CHROMIUM, "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars",
+            [CHROMIUM, "--headless=new", "--no-sandbox", "--disable-gpu", "--hide-scrollbars", "--password-store=basic",
              f"--remote-debugging-port={self._port}", f"--user-data-dir={self._profile.name}", "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            # Aucun bus D-Bus : sinon Chromium hériterait du bus de test (ou de celui de l'utilisateur) et y ferait
+            # activer des services réels (portails, kwallet, kdeconnect…) qui survivent au test
+            env={**os.environ, "DBUS_SESSION_BUS_ADDRESS": "disabled:"},
             start_new_session=True,  # groupe à part : close() termine aussi les processus enfants de Chromium
         )
         self._session = aiohttp.ClientSession()
@@ -98,6 +102,7 @@ class Browser:
                     pages = [page for page in await response.json() if page["type"] == "page"]
                     if pages:
                         self._socket = await self._session.ws_connect(pages[0]["webSocketDebuggerUrl"], max_msg_size=0)
+                        await self.call("Runtime.enable")  # active Runtime.exceptionThrown
                         return
             except aiohttp.ClientError:
                 pass
@@ -133,6 +138,9 @@ class Browser:
         await self._socket.send_json({"id": self._next_id, "method": method, "params": params})
         while True:
             message = json.loads((await self._socket.receive()).data)
+            if message.get("method") == "Runtime.exceptionThrown":
+                details = message["params"]["exceptionDetails"]
+                self.exceptions.append(details.get("exception", {}).get("description") or details.get("text", "?"))
             if message.get("id") == self._next_id:
                 if "error" in message:
                     raise RuntimeError(message["error"])
@@ -152,7 +160,10 @@ class Browser:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while loop.time() < deadline:
-            if await self.evaluate(expression):
-                return
+            try:
+                if await self.evaluate(expression):
+                    return
+            except RuntimeError:
+                pass  # page pas encore chargée (élément absent) : on réessaie jusqu'au délai
             await asyncio.sleep(0.1)
         raise TimeoutError(expression)

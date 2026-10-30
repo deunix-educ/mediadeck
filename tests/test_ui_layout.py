@@ -42,12 +42,10 @@ class PlayerLayoutTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.server = TestServer(make_app())
         await self.server.start_server()
+        self.addAsyncCleanup(self.server.close)  # enregistrés ici : asyncTearDown n'est pas appelé si asyncSetUp échoue
         self.browser = Browser()
+        self.addAsyncCleanup(self.browser.close)
         await self.browser.start()
-
-    async def asyncTearDown(self) -> None:
-        await self.browser.close()
-        await self.server.close()
 
     def url(self, scenario: str) -> str:
         return f"http://127.0.0.1:{self.server.port}/?token={scenario}"
