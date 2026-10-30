@@ -301,6 +301,7 @@ avertissement de certificat depuis le port HTTP.
 | `make status` / `make logs` | état et journal du service |
 | `make firewall` | ouvrir le port aux réseaux privés avec ufw (`HTTP_PORT=8766` pour le port HTTP en clair) |
 | `make lint` / `make test` | pyright / tests unitaires |
+| `make test-integration` | scénario complet (serveur, bus D-Bus privé, faux lecteur, faux `gio` et `pactl`) ; inclus dans `make test` |
 | `make service-uninstall`, `make uinput-remove`, `make distclean` | désinstallation |
 
 ## Sécurité
