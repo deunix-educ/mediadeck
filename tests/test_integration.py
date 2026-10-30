@@ -1,63 +1,26 @@
 """Scénario complet : vrai serveur (HTTP + WebSocket), bus D-Bus de session privé, faux lecteur MPRIS, faux gio et pactl.
 
-Rien ne touche au bureau de l'utilisateur : le bus, les dossiers XDG et le PATH sont isolés, et les programmes lancés
-(``gio``, ``pactl``, une commande de lanceur) sont des scripts qui journalisent leurs arguments. Ignoré sans dbus-daemon.
+L'environnement isolé vient de ``stack.py`` (rien ne touche au bureau de l'utilisateur). Ignoré sans dbus-daemon.
 """
 
 import asyncio
 import json
-import os
-import shutil
-import subprocess
-import sys
-import tempfile
 import unittest
 import warnings
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
-from unittest import mock
 
-import aiohttp
-from aiohttp.test_utils import TestClient, TestServer
+from aiohttp.test_utils import TestClient
 from dbus_next.aio.message_bus import MessageBus
 from dbus_next.constants import PropertyAccess
 from dbus_next.service import ServiceInterface, dbus_property, method
 from dbus_next.signature import Variant
 
-from mediadeck import server as server_module
-from mediadeck.config import parse_config
-from mediadeck.launchers import LauncherStore
 from mediadeck.mpris import MPRIS_PATH, MPRIS_PREFIX
-from mediadeck.server import MediaDeckServer
+from stack import DBUS_DAEMON, PNG, TOKEN, TRICKY_NAME, Stack
 
-DBUS_DAEMON = shutil.which("dbus-daemon")
-TOKEN = "t" * 32
 PLAYER_NAME = MPRIS_PREFIX + "fakeplayer"
-TRICKY_NAME = "été ♪ $(reboot).mp3"  # accents, symboles et syntaxe de shell : doit arriver tel quel à gio
-# PNG 1×1 valide
-PNG = bytes.fromhex(
-    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002"
-    "00010005fe02fe0a2d2d1b0000000049454e44ae426082"
-)
-
-# Programme factice : ajoute une ligne JSON {"tool": nom, "argv": [...]} au journal puis se termine
-# (``pactl`` répond en plus aux requêtes de lecture ; ``subscribe`` reste ouvert comme le vrai)
-FAKE_TOOL = """#!{python}
-import json, os, sys, time
-tool = os.path.basename(sys.argv[0])
-args = sys.argv[1:]
-with open(os.environ["MEDIADECK_FAKE_LOG"], "a") as log:
-    log.write(json.dumps({{"tool": tool, "argv": args}}) + "\\n")
-if tool == "pactl":
-    if args[-2:] == ["list", "sinks"]:
-        print(json.dumps([{{"name": "fake", "description": "Fake output", "mute": False,
-                           "volume": {{"front-left": {{"value_percent": "50%"}}}}}}]))
-    elif args == ["get-default-sink"]:
-        print("fake")
-    elif args == ["subscribe"]:
-        time.sleep(3600)
-"""
 
 
 class FakeRoot(ServiceInterface):
@@ -120,68 +83,16 @@ class FakePlayer(ServiceInterface):
 @unittest.skipUnless(DBUS_DAEMON, "dbus-daemon not installed")
 class FullScenarioTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        assert DBUS_DAEMON
         warnings.filterwarnings("ignore", message="unclosed <socket", category=ResourceWarning)
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        tmp = Path(self._tmp.name).resolve()
+        self.stack = Stack()
+        await self.stack.start()
+        self.addAsyncCleanup(self.stack.close)
+        self.client: TestClient = self.stack.client
+        self.root = self.stack.root
+        self.tricky = self.stack.tricky
+        self.art_file = self.stack.art_file
 
-        # Faux programmes en tête du PATH, journal commun
-        bin_dir = tmp / "bin"
-        bin_dir.mkdir()
-        for tool in ("gio", "pactl", "recorder"):
-            script = bin_dir / tool
-            script.write_text(FAKE_TOOL.format(python=sys.executable))
-            script.chmod(0o755)
-        self.log_path = tmp / "tools.log"
-        self.log_path.touch()
-
-        # Bibliothèque : un nom piégé, un fichier caché, un script déguisé, un sous-dossier
-        self.root = tmp / "Musique"
-        (self.root / "Albums").mkdir(parents=True)
-        (self.root / "Albums" / "morceau.mp3").write_bytes(b"audio")
-        self.tricky = self.root / TRICKY_NAME
-        self.tricky.write_bytes(b"audio")
-        (self.root / ".secret.mp3").write_bytes(b"audio")
-        (self.root / "script.mp3").symlink_to(self.root / "Albums")  # lien vers un dossier, pas un fichier audio
-        (self.root / "notes.sh").write_text("#!/bin/sh\n")
-        self.art_file = tmp / "cover.png"
-        self.art_file.write_bytes(PNG)
-
-        env = {
-            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-            "MEDIADECK_FAKE_LOG": str(self.log_path),
-            "XDG_DATA_HOME": str(tmp / "data"),
-            "XDG_CACHE_HOME": str(tmp / "cache"),
-        }
-        patcher = mock.patch.dict(os.environ, env)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-        self.daemon = subprocess.Popen(
-            [DBUS_DAEMON, "--session", "--nofork", "--print-address=1"], stdout=subprocess.PIPE, text=True
-        )
-        assert self.daemon.stdout is not None
-        address = self.daemon.stdout.readline().strip()
-        os.environ["DBUS_SESSION_BUS_ADDRESS"] = address
-        self.addCleanup(self._stop_daemon)
-
-        config = parse_config(
-            {
-                "server": {"token": TOKEN, "host": "127.0.0.1"},
-                "features": {"input": False, "power": False},
-                "media": {"roots": [str(self.root)], "thumbnails": False},
-                "launchers": [{"id": "rec", "label": "Recorder", "command": ["recorder", "--fs", "$(reboot)"]}],
-            }
-        )
-        store = LauncherStore(tmp / "launchers.db")
-        with mock.patch.object(server_module, "LauncherStore", lambda: store):
-            self.deck = MediaDeckServer(config)
-        self.client = TestClient(TestServer(self.deck.build_app()))
-        await self.client.start_server()
-        self.addAsyncCleanup(self.client.close)
-
-        self.player_bus = await MessageBus(bus_address=address).connect()
+        self.player_bus = await MessageBus(bus_address=self.stack.address).connect()
         self.addCleanup(self.player_bus.disconnect)
         self.player = FakePlayer((self.root / "Albums" / "morceau.mp3").as_uri(), self.art_file.as_uri())
         self.player_bus.export(MPRIS_PATH, FakeRoot())
@@ -190,12 +101,6 @@ class FullScenarioTest(unittest.IsolatedAsyncioTestCase):
 
         self.ws = await self.client.ws_connect(f"/ws?token={TOKEN}")
         self.addAsyncCleanup(self.ws.close)
-
-    def _stop_daemon(self) -> None:
-        self.daemon.terminate()
-        self.daemon.wait()
-        assert self.daemon.stdout is not None
-        self.daemon.stdout.close()
 
     # ------------------------------------------------------------------
     # Outils
@@ -210,8 +115,7 @@ class FullScenarioTest(unittest.IsolatedAsyncioTestCase):
         return False
 
     def tool_calls(self, tool: str) -> list[list[str]]:
-        lines = [json.loads(line) for line in self.log_path.read_text().splitlines()]
-        return [line["argv"] for line in lines if line["tool"] == tool]
+        return self.stack.tool_calls(tool)
 
     async def message(self, accept: Callable[[dict[str, Any]], bool], seconds: float = 5.0) -> dict[str, Any]:
         """Prochain message du serveur qui satisfait ``accept`` (les autres sont ignorés)."""
