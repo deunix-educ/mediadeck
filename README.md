@@ -65,7 +65,8 @@ redémarrer le service (`systemctl --user restart mediadeck`).
 - **PC avec un VPN (WireGuard, Proton VPN…) : renseigner `advertise_host`.** `make url`, `make qr` et `make cert`
   déduisent l'adresse du PC de la route par défaut ; avec un VPN actif, elle passe par le tunnel (`wg0`, `tun0`,
   `proton0`… ; par exemple `10.2.0.2`) et l'adresse annoncée n'est pas joignable par la tablette. Le certificat HTTPS
-  serait en plus émis pour cette mauvaise adresse. Avant `make cert`, indiquer dans `~/.config/mediadeck/config.toml`
+  serait en plus émis pour cette mauvaise adresse. Ces trois commandes affichent un avertissement (avec les adresses
+  candidates) quand l'adresse détectée appartient à une interface virtuelle (tunnel, pont Docker). Avant `make cert`, indiquer dans `~/.config/mediadeck/config.toml`
   l'adresse du PC **sur le réseau local**, hors tunnel :
 
   ```toml

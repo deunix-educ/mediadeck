@@ -66,7 +66,8 @@ Run every `make` command **from the project folder** (the one containing the `Ma
 - **PC with a VPN (WireGuard, Proton VPN…): set `advertise_host`.** `make url`, `make qr` and `make cert` work out
   the PC's address from the default route; with an active VPN that route goes through the tunnel (`wg0`, `tun0`,
   `proton0`…; for example `10.2.0.2`), so the advertised address cannot be reached by the tablet. The HTTPS
-  certificate would also be issued for that wrong address. Before `make cert`, put the PC's address **on the local
+  certificate would also be issued for that wrong address. These three commands print a warning (with candidate
+  addresses) when the detected address belongs to a virtual interface (tunnel, Docker bridge). Before `make cert`, put the PC's address **on the local
   network**, outside any tunnel, in `~/.config/mediadeck/config.toml`:
 
   ```toml

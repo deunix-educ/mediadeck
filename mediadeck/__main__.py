@@ -13,6 +13,7 @@ import webbrowser
 from pathlib import Path
 
 from .config import CONFIG_PATH, Config, ConfigError, load_config
+from .network import advertised_warning
 from .qrpage import QrCard, write_page
 from .tls import TLS_DIR, build_ssl_context, default_hosts, enable_tls, generate_certificates, set_http_port
 
@@ -30,6 +31,15 @@ def lan_address() -> str:
 def advertised_host(config: Config) -> str:
     # advertise_host prime : la route par défaut peut passer par un VPN (wg0…) et non par le LAN
     return config.advertise_host or (lan_address() if config.host in ("0.0.0.0", "") else config.host)
+
+
+def warn_if_virtual(config: Config) -> None:
+    """Avertit (stderr) si l'adresse annoncée a été détectée et appartient à un tunnel ou un pont."""
+    if config.advertise_host or config.host not in ("0.0.0.0", ""):
+        return  # adresse choisie par l'utilisateur : on ne la conteste pas
+    message = advertised_warning(lan_address())
+    if message:
+        print(message, file=sys.stderr)
 
 
 def base_url(config: Config, plain: bool = False) -> str:
@@ -54,6 +64,7 @@ def print_qr(url: str) -> None:
 
 
 def print_url(config: Config) -> None:
+    warn_if_virtual(config)
     if config.http_port:
         print("Secure (HTTPS, encrypted):", file=sys.stderr)
     print_qr(client_url(config))
@@ -82,6 +93,7 @@ def access_cards(config: Config) -> list[QrCard]:
 
 def open_qr_page(config: Config) -> None:
     """Écrit la page des QR codes (mode 600) et l'ouvre dans le navigateur du PC."""
+    warn_if_virtual(config)
     path = write_page(access_cards(config))
     print(f"QR codes page: {path}")
     if not webbrowser.open(path.as_uri()):
@@ -90,6 +102,7 @@ def open_qr_page(config: Config) -> None:
 
 def make_cert(config: Config, config_path: Path) -> None:
     """Génère la CA locale et le certificat serveur, puis active HTTPS dans la configuration."""
+    warn_if_virtual(config)
     ca, cert, key = generate_certificates(TLS_DIR, default_hosts(advertised_host(config)))
     print(f"CA certificate: {ca}\nserver certificate: {cert}")
     if enable_tls(config_path, cert, key, ca):
