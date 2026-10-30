@@ -17,6 +17,7 @@ from .launchers import (
     BROWSERS,
     ICONS,
     KINDS,
+    MAX_OPENERS_PER_TYPE,
     OPENER_KINDS,
     CommandNotAllowed,
     LauncherError,
@@ -67,7 +68,10 @@ class AdminApi:
         app.router.add_delete("/api/launchers/{id}", self.delete)
         app.router.add_get("/api/apps", self.apps)
         app.router.add_get("/api/media/openers", self.list_openers)
-        app.router.add_put("/api/media/openers/{type}", self.set_opener)
+        app.router.add_post("/api/media/openers", self.create_opener)
+        app.router.add_post("/api/media/openers/reorder", self.reorder_openers)
+        app.router.add_put("/api/media/openers/{id}", self.update_opener)
+        app.router.add_delete("/api/media/openers/{id}", self.delete_opener)
 
     def authorized(self, request: web.Request) -> bool:
         return bearer_authorized(request, self._config.token)
@@ -113,24 +117,57 @@ class AdminApi:
     async def list_openers(self, _request: web.Request) -> web.StreamResponse:
         return json_response(
             {
-                "openers": [entry.to_dict() for entry in self._store.openers().values()],
+                "openers": [entry.to_dict() for entries in self._store.openers().values() for entry in entries],
                 "kinds": list(OPENER_KINDS),
                 "allow_command": self._config.allow_custom_command,
+                "max_per_type": MAX_OPENERS_PER_TYPE,
             }
         )
 
     @_api
-    async def set_opener(self, request: web.Request) -> web.StreamResponse:
-        media_type = request.match_info["type"]
-        media_type, kind, spec = validate_opener(
-            media_type,
-            await self._body(request),
+    async def create_opener(self, request: web.Request) -> web.StreamResponse:
+        body = await self._body(request)
+        media_type, label, kind, spec = validate_opener(
+            body.get("type") if isinstance(body, dict) else None,
+            body,
             allow_command=self._config.allow_custom_command,
-            current=self._store.openers().get(media_type),
         )
-        entry = self._store.set_opener(media_type, kind, spec)
-        log.info("media opener set: %s (%s)", entry.type, entry.kind)
+        entry = self._store.create_opener(media_type, label, kind, spec)
+        log.info("media player created: %s (%s, %s)", entry.id, entry.type, entry.kind)
+        self._changed()
+        return json_response(entry.to_dict(), 201)
+
+    @_api
+    async def update_opener(self, request: web.Request) -> web.StreamResponse:
+        current = self._store.get_opener(request.match_info["id"])
+        if current is None:
+            raise LauncherNotFound("unknown player")
+        _type, label, kind, spec = validate_opener(
+            current.type, await self._body(request), allow_command=self._config.allow_custom_command, current=current
+        )
+        entry = self._store.update_opener(current.id, label, kind, spec)
+        log.info("media player updated: %s (%s, %s)", entry.id, entry.type, entry.kind)
+        self._changed()
         return json_response(entry.to_dict())
+
+    @_api
+    async def delete_opener(self, request: web.Request) -> web.StreamResponse:
+        opener_id = request.match_info["id"]
+        self._store.delete_opener(opener_id)
+        log.info("media player deleted: %s", opener_id)
+        self._changed()
+        return web.Response(status=204, headers={"Cache-Control": "no-store"})
+
+    @_api
+    async def reorder_openers(self, request: web.Request) -> web.StreamResponse:
+        body = await self._body(request)
+        media_type = body.get("type") if isinstance(body, dict) else None
+        ids = body.get("ids") if isinstance(body, dict) else None
+        if not isinstance(media_type, str) or not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
+            raise LauncherError("type and ids (a list of player ids) are required")
+        self._store.reorder_openers(media_type, ids)
+        self._changed()
+        return web.Response(status=204, headers={"Cache-Control": "no-store"})
 
     @_api
     async def create(self, request: web.Request) -> web.StreamResponse:

@@ -264,6 +264,17 @@
             </form>
         </dialog>
 
+        <!-- Choix du lecteur d'un fichier (appui long sur une tuile du type qui a plusieurs lecteurs) -->
+        <div class="chooser" id="media-chooser" hidden>
+            <div class="chooser-backdrop" id="media-chooser-backdrop"></div>
+            <div class="chooser-sheet" role="dialog" aria-labelledby="media-chooser-heading">
+                <p class="sub" id="media-chooser-heading" data-i18n="media.chooser_title"></p>
+                <p class="chooser-file" id="media-chooser-file"></p>
+                <div class="chooser-list" id="media-chooser-list"></div>
+                <button class="chip" id="media-chooser-cancel" type="button" data-i18n="media.chooser_cancel"></button>
+            </div>
+        </div>
+
         <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
         <div class="overlay" id="no-token" hidden>

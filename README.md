@@ -149,13 +149,16 @@ les lanceurs. Les changements apparaissent aussitôt sur la tablette.
 
 L'onglet **Médias** (affiché dès qu'au moins un dossier est configuré) liste les fichiers **son**, **image** et
 **vidéo** sous forme d'icônes : sous-dossiers, fil d'Ariane, bouton retour, filtre Tout / Sons / Images / Vidéos, recherche.
-Un appui sur un fichier l'**ouvre sur le PC** ; la tablette reste une télécommande.
+Un appui sur un fichier l'**ouvre sur le PC** ; la tablette reste une télécommande. Un **appui long** (ou un clic droit) propose les autres lecteurs du type quand il y en a plusieurs.
 
 - **Dossiers** : `[media] roots` dans `config.toml` (chemins absolus ou `~/…`). Sans cette clé, ce sont les dossiers
   Musique, Vidéos et Images de l'utilisateur (lus dans `~/.config/user-dirs.dirs`, jamais tout le dossier personnel).
   `roots = []` désactive l'onglet. Un seul dossier est ouvert directement ; plusieurs apparaissent en premier niveau.
-- **Un lanceur spécial par type** (Son, Image, Vidéo) : le **chemin du fichier est ajouté en dernier argument**. Ils se
-  règlent sur la page `/admin`, section « Lecteurs de fichiers multimédias », avec les mêmes règles que les lanceurs :
+- **Un ou plusieurs lecteurs par type** (Son, Image, Vidéo) : le **chemin du fichier est ajouté en dernier argument**.
+  Ils se règlent sur la page `/admin`, section « Lecteurs de fichiers multimédias », avec les mêmes règles que les
+  lanceurs. Chaque lecteur a un nom ; **le premier de la liste ouvre par défaut** (un appui), les autres s'obtiennent par
+  un appui long sur le fichier. Les boutons ↑ ↓ changent l'ordre, donc le lecteur par défaut ; 8 lecteurs par type au
+  plus, et un type en garde toujours au moins un :
 
   | Lecteur | Commande exécutée | Ce que le client peut écrire |
   |---|---|---|

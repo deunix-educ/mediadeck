@@ -49,7 +49,8 @@ class UiCase(unittest.IsolatedAsyncioTestCase):
 
     async def open_remote(self) -> None:
         await self.browser.open(self.stack.url(f"/?token={TOKEN}"), 1280, 800)
-        await self.browser.wait_for("document.querySelector('#tabbar') !== null && document.body.dataset.ready !== 'x'")
+        # Le jeton de l'URL est mémorisé par le script de la page : /admin en dépend, il ne faut pas partir avant
+        await self.browser.wait_for("document.querySelector('#tabbar') !== null && localStorage.getItem('mediadeck.token') !== null")
 
     async def open_admin(self) -> None:
         await self.open_remote()  # mémorise le jeton dans le stockage de l'origine
@@ -402,36 +403,139 @@ class AdminPageTest(UiCase):
         await self.wait_titles(["Enregistreur"])
         self.assertEqual([item["id"] for item in await self.server_launchers()], ["rec"])
 
-    async def test_media_opener_set_on_admin_is_used_when_opening_a_file(self) -> None:
+    async def opener_action(self, media_type: str, index: int, button: int) -> None:
+        """Boutons d'un lecteur : 0 monter, 1 descendre, 2 modifier, 3 supprimer."""
+        await self.browser.evaluate(
+            f"document.querySelectorAll('#opener-list [data-type={media_type}] .admin-item')[{index}]"
+            f".querySelectorAll('.admin-actions button')[{button}].click()"
+        )
+
+    async def opener_titles(self, media_type: str) -> list[str]:
+        raw = await self.browser.evaluate(
+            f"JSON.stringify([...document.querySelectorAll('#opener-list [data-type={media_type}] .admin-item-title > span:first-child')]"
+            ".map((span) => span.textContent))"
+        )
+        return json.loads(raw)
+
+    async def wait_opener_titles(self, media_type: str, expected: list[str]) -> None:
+        for _ in range(100):
+            if await self.opener_titles(media_type) == expected:
+                return
+            await asyncio.sleep(0.05)
+        self.assertEqual(await self.opener_titles(media_type), expected)
+
+    async def server_players(self, media_type: str) -> list[tuple[str, str, str]]:
+        _, data = await self.api("GET", "/api/media/openers")
+        return [(o["id"], o["label"], o["kind"]) for o in data["openers"] if o["type"] == media_type]
+
+    async def press_tile(self, name: str, hold: float = 0.0, button: str | None = None) -> None:
+        """Appui réel au centre de la tuile, maintenu ``hold`` secondes : tactile par défaut (comme la tablette, où le
+        doigt reste attaché à la tuile et où un « click » suit même un appui long), souris si ``button`` est donné."""
+        await self.wait_tile_in_view(name)
+        raw = await self.browser.evaluate(
+            f"(() => {{ const r = [...document.querySelectorAll('#media-grid .media-tile')]"
+            f".find((tile) => tile.querySelector('{TILE_LABEL}').textContent === {js(name)}).getBoundingClientRect();"
+            " return JSON.stringify([r.left + r.width / 2, r.top + r.height / 2]); })()"
+        )
+        x, y = json.loads(raw)
+        if button is None:
+            await self.browser.call("Input.dispatchTouchEvent", type="touchStart", touchPoints=[{"x": x, "y": y}])
+            await asyncio.sleep(hold)
+            await self.browser.call("Input.dispatchTouchEvent", type="touchEnd", touchPoints=[])
+            return
+        common = {"x": x, "y": y, "button": button, "clickCount": 1}
+        await self.browser.call("Input.dispatchMouseEvent", type="mousePressed", **common)
+        await asyncio.sleep(hold)
+        await self.browser.call("Input.dispatchMouseEvent", type="mouseReleased", **common)
+
+    async def wait_tile_in_view(self, name: str) -> None:
+        await self.browser.wait_for(
+            f"[...document.querySelectorAll('#media-grid .media-tile')].some((tile) => "
+            f"tile.querySelector('{TILE_LABEL}').textContent === {js(name)})"
+        )
+
+    async def chooser_items(self) -> list[tuple[str, bool]]:
+        """(nom, porte l'étiquette « par défaut ») de chaque lecteur proposé."""
+        raw = await self.browser.evaluate(
+            "JSON.stringify([...document.querySelectorAll('#media-chooser-list .chooser-item')]"
+            ".map((item) => [item.querySelector('span').textContent, item.querySelector('small') !== null]))"
+        )
+        return [(name, tagged) for name, tagged in json.loads(raw)]
+
+    async def test_several_players_are_set_on_admin_and_chosen_by_long_press(self) -> None:
         await self.open_admin()
-        await self.browser.wait_for("document.querySelectorAll('#opener-list .admin-item').length === 3")
-        await self.browser.evaluate("document.querySelectorAll('#opener-list .admin-item')[0].querySelector('button').click()")
+        await self.browser.wait_for("document.querySelectorAll('#opener-list .opener-group').length === 3")
+        # Un seul lecteur par type au départ : on ne peut pas le supprimer
+        self.assertTrue(await self.browser.evaluate(
+            "document.querySelector('#opener-list [data-type=image] .admin-item .admin-actions button:nth-child(4)').disabled"))
+
+        # Le lecteur implicite du son devient une application nommée (les commandes brutes restent interdites)
+        await self.opener_action("audio", 0, 2)
         await self.browser.wait_for("document.getElementById('opener-dialog').open")
-        # Les commandes brutes restent interdites : l'option est désactivée
         self.assertTrue(
             await self.browser.evaluate("[...document.getElementById('opener-kind').options].find((o) => o.value === 'command').disabled")
         )
+        await self.fill("opener-label", "Appli")
         await self.fill("opener-kind", "app", "change")
         await self.browser.wait_for("[...document.getElementById('opener-app').options].some((o) => o.value === 'fake.desktop')")
         await self.fill("opener-app", "fake.desktop", "change")
         await self.submit("opener-form")
-        await self.browser.wait_for("!document.getElementById('opener-dialog').open")
-        _, data = await self.api("GET", "/api/media/openers")
-        audio = next(opener for opener in data["openers"] if opener["type"] == "audio")
-        self.assertEqual((audio["kind"], audio["spec"]), ("app", {"desktop_id": "fake.desktop"}))
+        await self.wait_opener_titles("audio", ["Appli"])
 
-        # Un seul dossier : l'onglet Médias l'ouvre directement ; le fichier son passe par l'application choisie
+        # Un second lecteur pour le son : l'application par défaut du système
+        await self.browser.evaluate("document.querySelector('#opener-list [data-type=audio] .opener-group-bar button').click()")
+        await self.browser.wait_for("document.getElementById('opener-dialog').open")
+        await self.submit("opener-form")  # sans nom : refusé, le dialogue reste ouvert
+        await self.browser.wait_for("!document.getElementById('opener-error').hidden")
+        await self.fill("opener-label", "Système")
+        await self.submit("opener-form")
+        await self.wait_opener_titles("audio", ["Appli", "Système"])
+        self.assertEqual(await self.server_players("audio"), [("audio", "Appli", "app"), ("systeme", "Système", "default")])
+
+        # Ordre : monter le second le met en tête (donc par défaut), le redescendre rétablit l'ordre
+        await self.opener_action("audio", 1, 0)
+        await self.wait_opener_titles("audio", ["Système", "Appli"])
+        await self.opener_action("audio", 1, 0)
+        await self.wait_opener_titles("audio", ["Appli", "Système"])
+
+        # Sur la tablette : un appui ouvre avec le premier lecteur, un appui long propose la liste
         await self.open_remote()
+        await self.browser.call("Emulation.setTouchEmulationEnabled", enabled=True)
         await self.select_tab("media")
-        await self.browser.wait_for(
-            f"[...document.querySelectorAll('#media-grid .media-tile')].some((t) => t.textContent.includes({js(TRICKY_NAME)}))"
-        )
+        await self.wait_tile_in_view(TRICKY_NAME)
+        gio = lambda: self.stack.tool_calls("gio")  # noqa: E731
+        await self.press_tile(TRICKY_NAME)
+        self.assertTrue(await self.until(lambda: len(gio()) == 1))
+        self.assertEqual(gio()[0], ["launch", str(self.stack.desktop), str(self.stack.tricky)])
+
+        await self.press_tile(TRICKY_NAME, hold=0.8)
+        await self.browser.wait_for("!document.getElementById('media-chooser').hidden")
+        self.assertEqual(await self.chooser_items(), [("Appli", True), ("Système", False)])  # le premier est le défaut
+        await asyncio.sleep(0.6)
+        self.assertEqual(await self.browser.evaluate("document.getElementById('media-chooser').hidden"), False)  # le relâchement ne l'a pas fermée
+        self.assertEqual(len(gio()), 1)  # ... et n'a rien ouvert
+        # Un navigateur qui livre le « click » du relâchement à la tuile d'origine ne doit pas non plus ouvrir le fichier
         await self.browser.evaluate(
             f"[...document.querySelectorAll('#media-grid .media-tile')]"
-            f".find((t) => t.textContent.includes({js(TRICKY_NAME)})).click()"
+            f".find((tile) => tile.querySelector('{TILE_LABEL}').textContent === {js(TRICKY_NAME)}).click()"
         )
-        self.assertTrue(await self.until(lambda: self.stack.tool_calls("gio")))
-        self.assertEqual(self.stack.tool_calls("gio"), [["launch", str(self.stack.desktop), str(self.stack.tricky)]])
+        await asyncio.sleep(0.3)
+        self.assertEqual(len(gio()), 1)
+
+        # Échap ferme la liste sans rien ouvrir ; le clic droit la rouvre
+        await self.browser.call("Input.dispatchKeyEvent", type="keyDown", key="Escape", code="Escape", windowsVirtualKeyCode=27)
+        await self.browser.wait_for("document.getElementById('media-chooser').hidden")
+        await self.press_tile(TRICKY_NAME, button="right")
+        await self.browser.wait_for("!document.getElementById('media-chooser').hidden")
+
+        # Choisir le second lecteur : le fichier s'ouvre avec lui seul
+        await asyncio.sleep(0.6)  # après le délai de grâce qui suit le relâchement du clic droit
+        await self.browser.evaluate("document.querySelectorAll('#media-chooser-list .chooser-item')[1].click()")
+        self.assertTrue(await self.until(lambda: len(gio()) == 2))
+        self.assertEqual(gio()[1], ["open", str(self.stack.tricky)])
+        await self.browser.wait_for("document.getElementById('media-chooser').hidden")
+        await asyncio.sleep(0.3)
+        self.assertEqual(len(gio()), 2)
 
 
 if __name__ == "__main__":

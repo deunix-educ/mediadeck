@@ -41,6 +41,7 @@ MEDIA_TYPES = ("audio", "image", "video")
 OPENER_KINDS = ("default", "app", "command")
 
 MAX_LAUNCHERS = 64
+MAX_OPENERS_PER_TYPE = 8
 MAX_LABEL = 40
 MAX_URL = 2000
 MAX_ARGS = 32
@@ -239,24 +240,37 @@ def validate(
 
 @dataclass(frozen=True)
 class OpenerEntry:
-    """Lanceur spécial d'un type de média : ouvre un fichier dont le chemin est ajouté à la commande."""
+    """Lecteur d'un type de média : ouvre un fichier dont le chemin est ajouté à la commande.
 
+    Un type peut en avoir plusieurs ; le premier (``position`` 0) ouvre par défaut. ``id`` vaut le nom du type pour
+    le lecteur implicite (aucun enregistré) ou migré d'une version où il n'y avait qu'un lecteur par type ; son
+    ``label`` est alors vide et l'interface décrit le lecteur par son genre."""
+
+    id: str
     type: str
+    label: str
     kind: str
     spec: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
-        return {"type": self.type, "kind": self.kind, "spec": self.spec}
+        return {"id": self.id, "type": self.type, "label": self.label, "kind": self.kind, "spec": self.spec}
 
 
 def validate_opener(
     media_type: Any, data: Any, *, allow_command: bool, current: OpenerEntry | None = None
-) -> tuple[str, str, dict[str, Any]]:
-    """Valide la définition du lecteur d'un type de média ; renvoie (type, kind, spec) normalisés."""
+) -> tuple[str, str, str, dict[str, Any]]:
+    """Valide la définition d'un lecteur ; renvoie (type, nom, kind, spec) normalisés.
+
+    Le nom est obligatoire à la création ; à la modification, un nom absent garde le nom actuel."""
     if not isinstance(media_type, str) or media_type not in MEDIA_TYPES:
         raise LauncherNotFound(f"media type must be one of: {', '.join(MEDIA_TYPES)}")
     if not isinstance(data, dict):
         raise LauncherError("body must be a JSON object")
+    label = data.get("label")
+    if label is None and current is not None:
+        label = current.label
+    elif not isinstance(label, str) or not 0 < len(label.strip()) <= MAX_LABEL:
+        raise LauncherError(f"label must be 1 to {MAX_LABEL} characters")
     kind = data.get("kind")
     if not isinstance(kind, str) or kind not in OPENER_KINDS:
         raise LauncherError(f"kind must be one of: {', '.join(OPENER_KINDS)}")
@@ -264,7 +278,7 @@ def validate_opener(
     unchanged = current is not None and current.kind == "command" and current.spec == spec
     if kind == "command" and not allow_command and not unchanged:
         raise CommandNotAllowed("custom commands are disabled (admin.allow_custom_command in config.toml)")
-    return media_type, kind, spec
+    return media_type, label.strip(), kind, spec
 
 
 def build_open_argv(opener: OpenerEntry, path: Path) -> list[str]:
@@ -323,17 +337,29 @@ CREATE TABLE IF NOT EXISTS launchers (
     spec TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS media_openers (
-    type TEXT PRIMARY KEY CHECK (type IN ('audio', 'image', 'video')),
+CREATE TABLE IF NOT EXISTS media_players (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL CHECK (type IN ('audio', 'image', 'video')),
+    position INTEGER NOT NULL,
+    label TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('default', 'app', 'command')),
     spec TEXT NOT NULL
 );
 """
 
 
-def _slug(label: str) -> str:
+def _slug(label: str, fallback: str = "launcher") -> str:
     ascii_label = unicodedata.normalize("NFKD", label).encode("ascii", "ignore").decode().lower()
-    return re.sub(r"[^a-z0-9]+", "-", ascii_label).strip("-")[:28] or "launcher"
+    return re.sub(r"[^a-z0-9]+", "-", ascii_label).strip("-")[:28] or fallback
+
+
+def _unique_id(label: str, taken: set[str], fallback: str = "launcher") -> str:
+    base = _slug(label, fallback)
+    candidate, counter = base, 1
+    while candidate in taken:
+        counter += 1
+        candidate = f"{base}-{counter}"
+    return candidate
 
 
 class LauncherStore:
@@ -345,8 +371,22 @@ class LauncherStore:
         self._db = sqlite3.connect(path)
         path.chmod(0o600)
         self._db.executescript(_SCHEMA)
-        self._db.execute("PRAGMA user_version = 1")
+        self._migrate_single_openers()
+        self._db.execute("PRAGMA user_version = 2")
         self._cache: list[LauncherEntry] | None = None
+
+    def _migrate_single_openers(self) -> None:
+        """Reprend les lecteurs d'avant (un seul par type, table ``media_openers``) : ils gardent le nom du type pour id,
+        ce qui laisse fonctionner l'ancienne adresse PUT /api/media/openers/<type>."""
+        if self._db.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'media_openers'").fetchone() is None:
+            return
+        with self._db:
+            for media_type, kind, spec in self._db.execute("SELECT type, kind, spec FROM media_openers").fetchall():
+                self._db.execute(
+                    "INSERT OR IGNORE INTO media_players (id, type, position, label, kind, spec) VALUES (?, ?, 0, '', ?, ?)",
+                    (media_type, media_type, kind, spec),
+                )
+            self._db.execute("DROP TABLE media_openers")
 
     def close(self) -> None:
         self._db.close()
@@ -369,12 +409,7 @@ class LauncherStore:
         entries = self.list()
         if len(entries) >= MAX_LAUNCHERS:
             raise LauncherError(f"at most {MAX_LAUNCHERS} launchers")
-        taken = {entry.id for entry in entries}
-        base = _slug(label)
-        launcher_id, counter = base, 1
-        while launcher_id in taken:
-            counter += 1
-            launcher_id = f"{base}-{counter}"
+        launcher_id = _unique_id(label, {entry.id for entry in entries})
         position = len(entries)
         self._write(
             "INSERT INTO launchers (id, position, label, icon, kind, spec) VALUES (?, ?, ?, ?, ?, ?)",
@@ -403,24 +438,76 @@ class LauncherStore:
             self._db.executemany("UPDATE launchers SET position = ? WHERE id = ?", list(enumerate(ids)))
         self._cache = None
 
-    def openers(self) -> dict[str, OpenerEntry]:
-        """Lecteur de chaque type de média ; l'application par défaut du système tant qu'aucun n'est choisi."""
-        found = {row[0]: row for row in self._db.execute("SELECT type, kind, spec FROM media_openers")}
-        return {
-            media_type: OpenerEntry(media_type, found[media_type][1], json.loads(found[media_type][2]))
-            if media_type in found
-            else OpenerEntry(media_type, "default", {})
-            for media_type in MEDIA_TYPES
-        }
+    def openers(self) -> dict[str, list[OpenerEntry]]:
+        """Lecteurs de chaque type par ordre de préférence (le premier ouvre par défaut) ; il y en a toujours au moins
+        un : l'application par défaut du système tant qu'aucun n'est enregistré."""
+        rows = self._db.execute("SELECT id, type, label, kind, spec FROM media_players ORDER BY position, rowid")
+        result: dict[str, list[OpenerEntry]] = {media_type: [] for media_type in MEDIA_TYPES}
+        for opener_id, media_type, label, kind, spec in rows:
+            result[media_type].append(OpenerEntry(opener_id, media_type, label, kind, json.loads(spec)))
+        for media_type, entries in result.items():
+            if not entries:
+                entries.append(OpenerEntry(media_type, media_type, "", "default", {}))
+        return result
 
-    def set_opener(self, media_type: str, kind: str, spec: dict[str, Any]) -> OpenerEntry:
+    def get_opener(self, opener_id: str) -> OpenerEntry | None:
+        return next((entry for entries in self.openers().values() for entry in entries if entry.id == opener_id), None)
+
+    def _materialize(self, media_type: str) -> None:
+        """Enregistre le lecteur implicite d'un type, avant d'en ajouter ou d'en modifier un."""
+        if self._db.execute("SELECT 1 FROM media_players WHERE type = ?", (media_type,)).fetchone() is None:
+            with self._db:
+                self._db.execute(
+                    "INSERT INTO media_players (id, type, position, label, kind, spec) VALUES (?, ?, 0, '', 'default', '{}')",
+                    (media_type, media_type),
+                )
+
+    def create_opener(self, media_type: str, label: str, kind: str, spec: dict[str, Any]) -> OpenerEntry:
+        if len(self.openers()[media_type]) >= MAX_OPENERS_PER_TYPE:
+            raise LauncherError(f"at most {MAX_OPENERS_PER_TYPE} players per media type")
+        self._materialize(media_type)
+        taken = {entry.id for entries in self.openers().values() for entry in entries} | set(MEDIA_TYPES)
+        opener_id = _unique_id(label, taken, "player")
+        position = len(self.openers()[media_type])
         with self._db:
             self._db.execute(
-                "INSERT INTO media_openers (type, kind, spec) VALUES (?, ?, ?) "
-                "ON CONFLICT (type) DO UPDATE SET kind = excluded.kind, spec = excluded.spec",
-                (media_type, kind, json.dumps(spec)),
+                "INSERT INTO media_players (id, type, position, label, kind, spec) VALUES (?, ?, ?, ?, ?, ?)",
+                (opener_id, media_type, position, label, kind, json.dumps(spec)),
             )
-        return OpenerEntry(media_type, kind, spec)
+        return OpenerEntry(opener_id, media_type, label, kind, spec)
+
+    def update_opener(self, opener_id: str, label: str, kind: str, spec: dict[str, Any]) -> OpenerEntry:
+        current = self.get_opener(opener_id)
+        if current is None:
+            raise LauncherNotFound("unknown player")
+        self._materialize(current.type)
+        with self._db:
+            self._db.execute(
+                "UPDATE media_players SET label = ?, kind = ?, spec = ? WHERE id = ?",
+                (label, kind, json.dumps(spec), opener_id),
+            )
+        return OpenerEntry(opener_id, current.type, label, kind, spec)
+
+    def delete_opener(self, opener_id: str) -> None:
+        current = self.get_opener(opener_id)
+        if current is None:
+            raise LauncherNotFound("unknown player")
+        remaining = [entry.id for entry in self.openers()[current.type] if entry.id != opener_id]
+        if not remaining:
+            raise LauncherError("a media type needs at least one player")
+        with self._db:
+            self._db.execute("DELETE FROM media_players WHERE id = ?", (opener_id,))
+            self._db.executemany("UPDATE media_players SET position = ? WHERE id = ?", list(enumerate(remaining)))
+
+    def reorder_openers(self, media_type: str, ids: list[str]) -> None:
+        """Nouvel ordre des lecteurs d'un type ; le premier devient le lecteur par défaut."""
+        if media_type not in MEDIA_TYPES:
+            raise LauncherNotFound(f"media type must be one of: {', '.join(MEDIA_TYPES)}")
+        if sorted(ids) != sorted(entry.id for entry in self.openers()[media_type]):
+            raise LauncherError("ids must list every player of the type exactly once")
+        self._materialize(media_type)
+        with self._db:
+            self._db.executemany("UPDATE media_players SET position = ? WHERE id = ?", list(enumerate(ids)))
 
     def seed(self, launchers: Iterable[ConfigLauncher]) -> int:
         """Importe une seule fois les [[launchers]] du fichier de configuration ; renvoie le nombre importé."""

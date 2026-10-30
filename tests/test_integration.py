@@ -268,6 +268,45 @@ class FullScenarioTest(unittest.IsolatedAsyncioTestCase):
         state = await self.state_with(lambda data: data["system"]["media"]["last"] is not None)
         self.assertEqual(state["system"]["media"]["last"]["name"], Path(TRICKY_NAME).stem)
 
+    async def test_open_media_with_a_chosen_player_among_several(self) -> None:
+        root = await self.root_id()
+        headers = self.media_headers()
+        # Deux lecteurs de plus pour le son (une application et le défaut du système), un pour les images
+        app = {"type": "audio", "label": "Appli", "kind": "app", "spec": {"desktop_id": "fake.desktop"}}
+        response = await self.client.post("/api/media/openers", json=app, headers=headers)
+        self.assertEqual(response.status, 201, await response.text())
+        response = await self.client.post(
+            "/api/media/openers", json={"type": "image", "label": "Visionneuse", "kind": "default"}, headers=headers
+        )
+        self.assertEqual(response.status, 201)
+
+        # La tablette reçoit les lecteurs de chaque type (nom et genre), jamais la commande ni l'application
+        state = await self.state_with(lambda data: len(data["system"]["media"]["openers"]["audio"]) == 2)
+        players = state["system"]["media"]["openers"]
+        self.assertEqual(players["audio"], [{"id": "audio", "label": "", "kind": "default"}, {"id": "appli", "label": "Appli", "kind": "app"}])
+        self.assertEqual(len(players["image"]), 2)
+        self.assertNotIn("fake.desktop", json.dumps(state["system"]["media"]))
+
+        # Sans choix : le premier lecteur du type ; avec choix : celui-là
+        await self.accepted(domain="system", action="open_media", root=root, path=TRICKY_NAME)
+        self.assertTrue(await self.until(lambda: len(self.tool_calls("gio")) == 1))
+        await self.accepted(domain="system", action="open_media", root=root, path=TRICKY_NAME, opener="appli")
+        self.assertTrue(await self.until(lambda: len(self.tool_calls("gio")) == 2))
+        self.assertEqual(
+            self.tool_calls("gio"),
+            [["open", str(self.tricky)], ["launch", str(self.stack.desktop), str(self.tricky)]],
+        )
+
+        # Un lecteur inconnu, d'un autre type ou mal formé est refusé sans rien lancer
+        for opener in ("inconnu", "visionneuse", "", 3, ["appli"], {"id": "appli"}):
+            await self.refused(domain="system", action="open_media", root=root, path=TRICKY_NAME, opener=opener)
+        self.assertEqual(len(self.tool_calls("gio")), 2)
+
+        # Supprimer le lecteur choisi : l'identifiant ne désigne plus rien
+        self.assertEqual((await self.client.delete("/api/media/openers/appli", headers=headers)).status, 204)
+        await self.state_with(lambda data: len(data["system"]["media"]["openers"]["audio"]) == 1)
+        await self.refused(domain="system", action="open_media", root=root, path=TRICKY_NAME, opener="appli")
+
     async def test_configured_launcher_runs_its_argv_verbatim(self) -> None:
         state = await self.state_with(lambda data: bool(data["system"]["launchers"]))
         self.assertEqual([launcher["id"] for launcher in state["system"]["launchers"]], ["rec"])

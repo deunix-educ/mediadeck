@@ -61,6 +61,12 @@ const MESSAGES = {
         "media.none_match": "Aucun fichier de ce type ici.",
         "media.truncated": "Liste tronquée : seuls les premiers éléments sont affichés.",
         "media.opening": "Ouverture : {name}",
+        "media.chooser_title": "Ouvrir avec…",
+        "media.chooser_default": "par défaut",
+        "media.chooser_cancel": "Annuler",
+        "media.player_default": "Application par défaut",
+        "media.player_app": "Application installée",
+        "media.player_command": "Commande",
         "media.error": "Dossier illisible : {message}",
         "media.denied": "Jeton refusé : rouvrez la télécommande avec son URL complète.",
         "remote.none": "Clavier et souris virtuels indisponibles",
@@ -150,6 +156,12 @@ const MESSAGES = {
         "media.none_match": "No file of this type here.",
         "media.truncated": "List truncated: only the first items are shown.",
         "media.opening": "Opening: {name}",
+        "media.chooser_title": "Open with…",
+        "media.chooser_default": "default",
+        "media.chooser_cancel": "Cancel",
+        "media.player_default": "System default application",
+        "media.player_app": "Installed application",
+        "media.player_command": "Command",
         "media.error": "Cannot read the folder: {message}",
         "media.denied": "Token rejected: reopen the remote with its full URL.",
         "remote.none": "Virtual keyboard and mouse unavailable",
@@ -1048,6 +1060,9 @@ class MediaPanel {
     static SEARCH_DELAY_MS = 300;
     static MIN_QUERY = 2;
     static THUMB_SIZE = 160;
+    static HOLD_MS = 500; // appui long : choix du lecteur
+    static HOLD_SLOP_PX = 10; // au-delà, le doigt fait défiler : ce n'est plus un appui long
+    static RELEASE_GRACE_MS = 400; // après le relâchement d'un appui long, les clics du même geste sont ignorés
 
     constructor(connection, i18n, toast, tabs) {
         this.connection = connection;
@@ -1058,6 +1073,7 @@ class MediaPanel {
         this.rootsKey = "";
         this.roots = [];
         this.thumbnails = false;
+        this.openers = {}; // lecteurs de chaque type : { audio: [{id, label, kind}], … } (system.media.openers)
         this.root = null; // dossier racine affiché ; null = liste des dossiers
         this.path = "";
         this.listing = null;
@@ -1081,7 +1097,19 @@ class MediaPanel {
             search: $("media-search"),
             grid: $("media-grid"),
             status: $("media-status"),
+            chooser: $("media-chooser"),
+            chooserFile: $("media-chooser-file"),
+            chooserList: $("media-chooser-list"),
         };
+        this.pressing = false; // le doigt qui a ouvert la liste est encore posé
+        this.guardUntil = 0;
+        $("media-chooser-backdrop").addEventListener("click", () => this.chooserClick(() => this.closeChooser()));
+        $("media-chooser-cancel").addEventListener("click", () => this.chooserClick(() => this.closeChooser()));
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape" && !this.els.chooser.hidden) {
+                this.closeChooser();
+            }
+        });
         this.els.up.addEventListener("click", () => this.up());
         $("media-refresh").addEventListener("click", () => (this.searching ? this.search() : this.load()));
         this.els.search.addEventListener("input", () => this.onSearchInput());
@@ -1108,6 +1136,7 @@ class MediaPanel {
 
     update(system) {
         const media = system.media ?? {};
+        this.openers = media.openers ?? {}; // change sans que la liste affichée ait à être rechargée
         const roots = media.roots ?? [];
         const key = JSON.stringify([roots, media.thumbnails === true]);
         if (key === this.rootsKey) {
@@ -1256,9 +1285,13 @@ class MediaPanel {
     }
 
     // Ouvre un fichier sur le PC : root/path désignent le dossier de l'entrée (résultat de recherche ou dossier affiché)
-    open(root, folder, entry) {
+    open(root, folder, entry, opener = null) {
         const path = folder === "" ? entry.name : `${folder}/${entry.name}`;
-        this.connection.send({ domain: "system", action: "open_media", root, path });
+        const message = { domain: "system", action: "open_media", root, path };
+        if (opener !== null) {
+            message.opener = opener; // sinon le serveur prend le premier lecteur du type
+        }
+        this.connection.send(message);
         this.toast.show(this.i18n.t("media.opening", { name: entry.name }));
     }
 
@@ -1365,8 +1398,125 @@ class MediaPanel {
             small.textContent = caption;
             button.append(small);
         }
-        button.addEventListener("click", () => onClick(button));
+        if (entry.kind !== "dir") {
+            this.armHold(button, entry, root, folder);
+        }
+        button.addEventListener("click", () => {
+            if (button.dataset.held) {
+                delete button.dataset.held; // ce clic termine un appui long : la liste est déjà ouverte
+                return;
+            }
+            onClick(button);
+        });
         return button;
+    }
+
+    players(kind) {
+        return this.openers[kind] ?? [];
+    }
+
+    playerName(player) {
+        return player.label || this.i18n.t(`media.player_${player.kind}`);
+    }
+
+    // Appui long (ou menu contextuel) sur un fichier dont le type a plusieurs lecteurs : liste de choix
+    armHold(button, entry, root, folder) {
+        let timer = null;
+        let down = false; // le doigt (ou le bouton) est posé sur la tuile
+        let origin = { x: 0, y: 0 };
+        const cancel = () => {
+            clearTimeout(timer);
+            timer = null;
+        };
+        const choose = () => {
+            if (this.players(entry.kind).length < 2) {
+                return;
+            }
+            button.dataset.held = "1"; // le « click » qui suit le relâchement ne doit pas ouvrir le fichier
+            this.showChooser(root, folder, entry, down);
+        };
+        button.addEventListener("pointerdown", (event) => {
+            if (event.button !== 0) {
+                return;
+            }
+            delete button.dataset.held; // nouveau geste
+            down = true;
+            origin = { x: event.clientX, y: event.clientY };
+            cancel();
+            timer = setTimeout(() => {
+                timer = null;
+                choose();
+            }, MediaPanel.HOLD_MS);
+        });
+        button.addEventListener("pointermove", (event) => {
+            if (timer !== null && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > MediaPanel.HOLD_SLOP_PX) {
+                cancel();
+            }
+        });
+        ["pointerup", "pointercancel", "pointerleave"].forEach((name) =>
+            button.addEventListener(name, () => {
+                down = false;
+                cancel();
+            }),
+        );
+        // Clic droit à la souris, appui long de certains navigateurs : même liste, sans menu du navigateur
+        button.addEventListener("contextmenu", (event) => {
+            event.preventDefault();
+            cancel();
+            choose();
+        });
+    }
+
+    // pressed : la liste s'ouvre sous un doigt (ou un bouton) encore posé
+    showChooser(root, folder, entry, pressed = false) {
+        this.els.chooserFile.textContent = entry.name;
+        this.els.chooserList.replaceChildren(
+            ...this.players(entry.kind).map((player, index) => {
+                const item = document.createElement("button");
+                item.type = "button";
+                item.className = "chooser-item";
+                const name = document.createElement("span");
+                name.textContent = this.playerName(player);
+                item.append(name);
+                if (index === 0) {
+                    const tag = document.createElement("small");
+                    tag.textContent = this.i18n.t("media.chooser_default");
+                    item.append(tag);
+                }
+                item.addEventListener("click", () =>
+                    this.chooserClick(() => {
+                        this.closeChooser();
+                        this.open(root, folder, entry, player.id);
+                    }),
+                );
+                return item;
+            }),
+        );
+        this.els.chooser.hidden = false;
+        this.els.chooserList.querySelector("button")?.focus();
+        // La liste s'ouvre sous le doigt : le « click » qui suit son relâchement tombe sur le fond (qui la refermerait) ou
+        // sur un bouton de la liste (qui ouvrirait un lecteur). On ignore les clics de ce geste, puis un court délai.
+        if (!pressed) {
+            return;
+        }
+        this.pressing = true;
+        const release = () => {
+            this.pressing = false;
+            this.guardUntil = performance.now() + MediaPanel.RELEASE_GRACE_MS;
+        };
+        document.addEventListener("pointerup", release, { once: true, capture: true });
+        document.addEventListener("pointercancel", release, { once: true, capture: true });
+    }
+
+    chooserClick(action) {
+        if (this.pressing || performance.now() < this.guardUntil) {
+            return;
+        }
+        action();
+    }
+
+    closeChooser() {
+        this.els.chooser.hidden = true;
     }
 
     visibleEntries() {

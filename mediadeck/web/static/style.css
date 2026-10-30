@@ -1109,6 +1109,79 @@ input[type="range"]:disabled {
     color: #fff;
 }
 
+/* Choix du lecteur : feuille en bas de l'écran, sous le toast */
+.chooser {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: grid;
+    align-items: end;
+    justify-items: center;
+}
+
+.chooser-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgb(0 0 0 / 0.55);
+}
+
+.chooser-sheet {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    width: min(420px, calc(100vw - 24px));
+    max-height: calc(100dvh - 32px);
+    margin-bottom: 16px;
+    padding: 16px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: 0 10px 30px rgb(0 0 0 / 0.5);
+}
+
+.chooser-sheet > .sub {
+    margin: 0;
+}
+
+.chooser-file {
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-weight: 700;
+}
+
+.chooser-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.chooser-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 52px;
+    padding: 0 16px;
+    border-radius: 14px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 16px;
+    font-weight: 600;
+    text-align: left;
+}
+
+.chooser-item small {
+    flex: none;
+    color: var(--text-faint);
+    font-size: 12px;
+}
+
+.chooser-sheet > .chip {
+    align-self: center;
+}
+
 .overlay {
     position: fixed;
     inset: 0;

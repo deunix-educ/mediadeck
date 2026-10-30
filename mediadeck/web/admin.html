@@ -29,7 +29,7 @@
         <section class="openers" aria-labelledby="openers-title">
             <h2 class="section-title" id="openers-title" data-i18n="openers.title"></h2>
             <p class="sub" data-i18n="openers.help"></p>
-            <ul class="admin-list" id="opener-list"></ul>
+            <div id="opener-list"></div>
         </section>
     </main>
 
@@ -98,6 +98,11 @@
     <dialog id="opener-dialog" aria-labelledby="opener-title">
         <form id="opener-form" novalidate>
             <h2 id="opener-title"></h2>
+
+            <label class="field">
+                <span data-i18n="openers.label"></span>
+                <input id="opener-label" type="text" maxlength="40" autocomplete="off">
+            </label>
 
             <label class="field">
                 <span data-i18n="form.kind"></span>

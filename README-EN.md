@@ -150,13 +150,15 @@ Changes show up on the tablet immediately.
 
 The **Media** tab (shown as soon as at least one folder is configured) lists **sound**, **image** and **video** files
 as icons: subfolders, breadcrumb, back button, All / Sounds / Images / Videos filter, search. Tapping a file **opens it on the
-PC**; the tablet stays a remote control.
+PC**; the tablet stays a remote control. A **long press** (or a right click) offers the other players of the type when there are several.
 
 - **Folders**: `[media] roots` in `config.toml` (absolute paths or `~/…`). Without this key, the user's Music, Videos
   and Pictures folders are used (read from `~/.config/user-dirs.dirs`, never the whole home folder). `roots = []`
   disables the tab. A single folder is opened directly; several appear as a first level.
-- **One special launcher per type** (Sound, Image, Video): the **file path is added as the last argument**. They are
-  set on the `/admin` page, "Media file players" section, with the same rules as launchers:
+- **One or several players per type** (Sound, Image, Video): the **file path is added as the last argument**. They
+  are set on the `/admin` page, "Media file players" section, with the same rules as launchers. Each player has a name;
+  **the first one in the list opens by default** (a tap), the others are reached with a long press on the file. The ↑ ↓
+  buttons change the order, hence the default player; at most 8 players per type, and a type always keeps at least one:
 
   | Player | Command run | What the client can write |
   |---|---|---|

@@ -61,7 +61,14 @@ class SystemControl:
                 {"id": launcher.id, "label": launcher.label, "icon": launcher.icon}
                 for launcher in self._launchers.list()
             ],
-            "media": self._media.snapshot(),
+            "media": {**self._media.snapshot(), "openers": self._opener_snapshot()},
+        }
+
+    def _opener_snapshot(self) -> dict[str, list[dict[str, str]]]:
+        """Lecteurs de chaque type pour la liste de choix de la tablette (jamais la commande ni l'application)."""
+        return {
+            media_type: [{"id": entry.id, "label": entry.label, "kind": entry.kind} for entry in entries]
+            for media_type, entries in self._launchers.openers().items()
         }
 
     async def execute(self, action: str, payload: dict[str, Any]) -> None:
@@ -73,7 +80,7 @@ class SystemControl:
             case "launch":
                 await self._launch(payload.get("id"))
             case "open_media":
-                await self._open_media(payload.get("root"), payload.get("path"))
+                await self._open_media(payload.get("root"), payload.get("path"), payload.get("opener"))
             case _:
                 raise ValueError(f"unknown system action '{action}'")
 
@@ -100,10 +107,17 @@ class SystemControl:
         log.info("launching %s: %s", launcher.id, command)
         await self._spawn(command)
 
-    async def _open_media(self, root: Any, path: Any) -> None:
-        """Ouvre un fichier de l'onglet Médias avec le lecteur de son type ; le chemin est résolu côté serveur."""
+    async def _open_media(self, root: Any, path: Any, opener_id: Any = None) -> None:
+        """Ouvre un fichier de l'onglet Médias avec un lecteur de son type (le premier sans choix) ; le chemin est
+        résolu côté serveur, et le client ne peut désigner qu'un lecteur déjà configuré pour ce type."""
         located = await asyncio.to_thread(self._media.resolve_file, root, path)
-        opener = self._launchers.openers()[located.type]
+        players = self._launchers.openers()[located.type]
+        if opener_id is None:
+            opener = players[0]
+        else:
+            opener = next((player for player in players if player.id == opener_id), None) if isinstance(opener_id, str) else None
+            if opener is None:
+                raise ValueError("unknown player for this type of file")
         command = build_open_argv(opener, self._media.open_path(located))
         log.info("opening %s file with %s: %s", located.type, opener.kind, command)
         await self._spawn(command)

@@ -92,6 +92,27 @@ body.admin {
     margin-top: 0;
 }
 
+/* Un groupe par type de fichier : titre, bouton d'ajout, puis les lecteurs par ordre de préférence */
+.opener-group {
+    margin-top: 24px;
+}
+
+.opener-group-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.opener-group-bar h3 {
+    margin: 0;
+    font-size: 16px;
+}
+
+.opener-group .admin-list {
+    margin: 12px 0 0;
+}
+
 .chip.danger {
     color: var(--danger);
 }

@@ -10,7 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from mediadeck.admin import AdminApi
 from mediadeck.config import parse_config
-from mediadeck.launchers import LauncherStore
+from mediadeck.launchers import MAX_OPENERS_PER_TYPE, LauncherStore
 
 TOKEN = "t" * 32
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
@@ -143,56 +143,118 @@ class AdminApiTest(AdminApiCase):
                 self.assertEqual(unknown.status, 400)
 
 
+VLC_DESKTOP = "[Desktop Entry]\nType=Application\nName=VLC\nExec=vlc\n"
+
+
 class OpenersApiTest(AdminApiCase):
     async def test_token_required(self) -> None:
-        for method, path in (("GET", "/api/media/openers"), ("PUT", "/api/media/openers/audio")):
+        routes = (
+            ("GET", "/api/media/openers"), ("POST", "/api/media/openers"), ("POST", "/api/media/openers/reorder"),
+            ("PUT", "/api/media/openers/audio"), ("DELETE", "/api/media/openers/audio"),
+        )
+        for method, path in routes:
             for headers in ({}, {"Authorization": "Bearer nope"}, {"Authorization": TOKEN}):
                 response = await self.client.request(method, path, headers=headers, json={"kind": "default"})
-                self.assertEqual(response.status, 401, (method, headers))
+                self.assertEqual(response.status, 401, (method, path, headers))
+        self.assertEqual(self.changes, 0)
 
     async def test_list_defaults_to_the_system_application(self) -> None:
         data = await (await self.client.get("/api/media/openers", headers=AUTH)).json()
         self.assertEqual([opener["type"] for opener in data["openers"]], ["audio", "image", "video"])
-        self.assertTrue(all(opener["kind"] == "default" for opener in data["openers"]))
+        self.assertTrue(all(opener["kind"] == "default" and opener["label"] == "" for opener in data["openers"]))
+        self.assertEqual([opener["id"] for opener in data["openers"]], ["audio", "image", "video"])
         self.assertEqual(data["kinds"], ["default", "app", "command"])
         self.assertFalse(data["allow_command"])
+        self.assertGreaterEqual(data["max_per_type"], 2)
 
-    async def test_set_and_read_back(self) -> None:
+    async def test_create_several_players_reorder_and_delete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / "vlc.desktop").write_text("[Desktop Entry]\nType=Application\nName=VLC\nExec=vlc\n")
+            (Path(tmp) / "vlc.desktop").write_text(VLC_DESKTOP)
             with mock.patch("mediadeck.launchers.desktop_dirs", return_value=[Path(tmp)]):
-                response = await self.client.put(
-                    "/api/media/openers/video", headers=AUTH, json={"kind": "app", "spec": {"desktop_id": "vlc.desktop"}}
+                response = await self.client.post(
+                    "/api/media/openers", headers=AUTH,
+                    json={"type": "video", "label": "VLC", "kind": "app", "spec": {"desktop_id": "vlc.desktop"}},
                 )
+        self.assertEqual(response.status, 201)
+        self.assertEqual(
+            await response.json(),
+            {"id": "vlc", "type": "video", "label": "VLC", "kind": "app", "spec": {"desktop_id": "vlc.desktop"}},
+        )
+        second = await self.client.post(
+            "/api/media/openers", headers=AUTH, json={"type": "video", "label": "Système", "kind": "default"}
+        )
+        self.assertEqual(second.status, 201)
+        listing = (await (await self.client.get("/api/media/openers", headers=AUTH)).json())["openers"]
+        self.assertEqual([o["id"] for o in listing if o["type"] == "video"], ["video", "vlc", "systeme"])
+
+        reorder = await self.client.post(
+            "/api/media/openers/reorder", headers=AUTH, json={"type": "video", "ids": ["systeme", "video", "vlc"]}
+        )
+        self.assertEqual(reorder.status, 204)
+        self.assertEqual([o.id for o in self.store.openers()["video"]], ["systeme", "video", "vlc"])
+
+        self.assertEqual((await self.client.delete("/api/media/openers/vlc", headers=AUTH)).status, 204)
+        self.assertEqual([o.id for o in self.store.openers()["video"]], ["systeme", "video"])
+        self.assertEqual(self.changes, 4)  # chaque modification est répercutée aux tablettes
+
+    async def test_update_keeps_the_label_when_absent_and_the_old_address_still_works(self) -> None:
+        # Ancienne adresse : PUT /api/media/openers/<type>, sans nom (le lecteur implicite a pour id son type)
+        response = await self.client.put("/api/media/openers/video", headers=AUTH, json={"kind": "default"})
         self.assertEqual(response.status, 200)
-        self.assertEqual(await response.json(), {"type": "video", "kind": "app", "spec": {"desktop_id": "vlc.desktop"}})
-        data = await (await self.client.get("/api/media/openers", headers=AUTH)).json()
-        self.assertEqual({o["type"]: o["kind"] for o in data["openers"]}, {"audio": "default", "image": "default", "video": "app"})
-        back = await self.client.put("/api/media/openers/video", headers=AUTH, json={"kind": "default"})
-        self.assertEqual((await back.json())["kind"], "default")
+        self.assertEqual((await response.json())["id"], "video")
+        renamed = await self.client.put("/api/media/openers/video", headers=AUTH, json={"label": "Défaut", "kind": "default"})
+        self.assertEqual((await renamed.json())["label"], "Défaut")
+        kept = await self.client.put("/api/media/openers/video", headers=AUTH, json={"kind": "default"})
+        self.assertEqual((await kept.json())["label"], "Défaut")
 
     async def test_errors(self) -> None:
-        unknown_type = await self.client.put("/api/media/openers/document", headers=AUTH, json={"kind": "default"})
-        self.assertEqual(unknown_type.status, 404)
-        for body in ({"kind": "web"}, {"kind": "app", "spec": {"desktop_id": "nope.desktop"}}, {}):
-            response = await self.client.put("/api/media/openers/audio", headers=AUTH, json=body)
+        post = lambda body: self.client.post("/api/media/openers", headers=AUTH, json=body)  # noqa: E731
+        self.assertEqual((await post({"type": "document", "label": "x", "kind": "default"})).status, 404)
+        for body in (
+            {"type": "audio", "kind": "default"},  # nom manquant
+            {"type": "audio", "label": "", "kind": "default"},
+            {"type": "audio", "label": "x", "kind": "web"},
+            {"type": "audio", "label": "x", "kind": "app", "spec": {"desktop_id": "nope.desktop"}},
+            {"label": "x", "kind": "default"},  # type manquant
+            [],
+        ):
+            self.assertIn((await post(body)).status, (400, 404), body)
+        self.assertEqual((await self.client.put("/api/media/openers/inconnu", headers=AUTH, json={"kind": "default"})).status, 404)
+        self.assertEqual((await self.client.delete("/api/media/openers/inconnu", headers=AUTH)).status, 404)
+        self.assertEqual((await self.client.delete("/api/media/openers/audio", headers=AUTH)).status, 400)  # le dernier du type
+        for body in ({"type": "audio", "ids": ["audio", "audio"]}, {"type": "audio", "ids": []}, {"type": "audio"}, {"ids": []}):
+            response = await self.client.post("/api/media/openers/reorder", headers=AUTH, json=body)
             self.assertEqual(response.status, 400, body)
+        self.assertEqual((await self.client.post("/api/media/openers/reorder", headers=AUTH, json={"type": "x", "ids": []})).status, 404)
+        forbidden = await post({"type": "audio", "label": "mpv", "kind": "command", "spec": {"argv": ["mpv"]}})
+        self.assertEqual(forbidden.status, 403)
         forbidden = await self.client.put(
             "/api/media/openers/audio", headers=AUTH, json={"kind": "command", "spec": {"argv": ["mpv"]}}
         )
         self.assertEqual(forbidden.status, 403)
-        self.assertTrue(all(opener.kind == "default" for opener in self.store.openers().values()))
+        self.assertEqual([len(entries) for entries in self.store.openers().values()], [1, 1, 1])
+        self.assertTrue(all(entry.kind == "default" for entries in self.store.openers().values() for entry in entries))
+        self.assertEqual(self.changes, 0)
+
+    async def test_limit_per_type(self) -> None:
+        statuses = [
+            (await self.client.post("/api/media/openers", headers=AUTH, json={"type": "image", "label": f"v{n}", "kind": "default"})).status
+            for n in range(MAX_OPENERS_PER_TYPE + 1)
+        ]
+        self.assertEqual(statuses.count(201), MAX_OPENERS_PER_TYPE - 1)
+        self.assertEqual(statuses[-1], 400)
 
 
 class OpenersApiCommandAllowedTest(AdminApiCase):
     allow_command = True
 
     async def test_command_opener(self) -> None:
-        response = await self.client.put(
-            "/api/media/openers/video", headers=AUTH, json={"kind": "command", "spec": {"argv": ["mpv", "--fs"]}}
+        response = await self.client.post(
+            "/api/media/openers", headers=AUTH,
+            json={"type": "video", "label": "mpv", "kind": "command", "spec": {"argv": ["mpv", "--fs"]}},
         )
-        self.assertEqual(response.status, 200)
-        self.assertEqual(self.store.openers()["video"].spec, {"argv": ["mpv", "--fs"]})
+        self.assertEqual(response.status, 201)
+        self.assertEqual(self.store.get_opener("mpv").spec, {"argv": ["mpv", "--fs"]})  # type: ignore[union-attr]
 
 
 class AdminApiCommandAllowedTest(AdminApiCase):

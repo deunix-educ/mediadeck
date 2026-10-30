@@ -44,8 +44,11 @@ const MESSAGES = {
         "kind.command": "Commande (avancé)",
         "kind.default": "Application par défaut du système",
         "openers.title": "Lecteurs de fichiers multimédias",
-        "openers.help": "Dans l'onglet Médias, un appui sur un fichier l'ouvre sur le PC avec le lecteur choisi ici pour son type. Le chemin du fichier est ajouté à la commande.",
+        "openers.help": "Dans l'onglet Médias, un appui sur un fichier l'ouvre sur le PC avec le premier lecteur de son type ; un appui long propose les autres lecteurs. Le chemin du fichier est ajouté à la commande.",
+        "openers.add": "Ajouter un lecteur",
+        "openers.add_title": "Nouveau lecteur : {type}",
         "openers.edit_title": "Lecteur : {type}",
+        "openers.label": "Nom du lecteur",
         "openers.default_help": "Le fichier est ouvert avec l'application que le système associe à son format.",
         "openers.command_help": "Le chemin du fichier est ajouté en dernier argument. Pas de shell : chaque ligne est un argument, sans guillemets.",
         "openers.command_locked": "Commandes brutes désactivées : le lecteur ne peut être changé que par une application installée. Pour les autoriser, définir allow_custom_command = true dans la section [admin] de config.toml.",
@@ -104,8 +107,11 @@ const MESSAGES = {
         "kind.command": "Command (advanced)",
         "kind.default": "System default application",
         "openers.title": "Media file players",
-        "openers.help": "In the Media tab, tapping a file opens it on the PC with the player chosen here for its type. The file path is added to the command.",
+        "openers.help": "In the Media tab, tapping a file opens it on the PC with the first player of its type; a long press offers the other players. The file path is added to the command.",
+        "openers.add": "Add a player",
+        "openers.add_title": "New player: {type}",
         "openers.edit_title": "Player: {type}",
+        "openers.label": "Player name",
         "openers.default_help": "The file is opened with the application the system associates with its format.",
         "openers.command_help": "The file path is added as the last argument. No shell: each line is one argument, without quotes.",
         "openers.command_locked": "Raw commands are disabled: the player can only be an installed application. To allow them, set allow_custom_command = true in the [admin] section of config.toml.",
@@ -188,8 +194,20 @@ class Api {
         return this.request("GET", "/api/media/openers");
     }
 
-    setOpener(type, opener) {
-        return this.request("PUT", `/api/media/openers/${encodeURIComponent(type)}`, opener);
+    createOpener(opener) {
+        return this.request("POST", "/api/media/openers", opener);
+    }
+
+    setOpener(id, opener) {
+        return this.request("PUT", `/api/media/openers/${encodeURIComponent(id)}`, opener);
+    }
+
+    removeOpener(id) {
+        return this.request("DELETE", `/api/media/openers/${encodeURIComponent(id)}`);
+    }
+
+    reorderOpeners(type, ids) {
+        return this.request("POST", "/api/media/openers/reorder", { type, ids });
     }
 
     create(entry) {
@@ -534,10 +552,10 @@ class LauncherForm {
 // ----------------------------------------------------------------------
 
 class OpenerList {
-    // onEdit(opener)
-    constructor(i18n, onEdit) {
+    // handlers : { add(type), edit(opener), remove(opener), move(opener, delta) }
+    constructor(i18n, handlers) {
         this.i18n = i18n;
-        this.onEdit = onEdit;
+        this.handlers = handlers;
     }
 
     summary(opener) {
@@ -551,37 +569,77 @@ class OpenerList {
         }
     }
 
-    render(openers) {
+    // openers : tous les lecteurs, regroupés par type dans l'ordre de préférence ; maxPerType : limite d'un type
+    render(openers, maxPerType) {
         const t = (key) => this.i18n.t(key);
+        const types = [...new Set(openers.map((opener) => opener.type))];
         $("opener-list").replaceChildren(
-            ...openers.map((opener) => {
-                const name = document.createElement("span");
-                name.textContent = t(`media.type.${opener.type}`);
-                const tag = document.createElement("span");
-                tag.className = "kind-tag";
-                tag.textContent = t(opener.kind === "default" ? "openers.tag_default" : `kind.${opener.kind}`);
-                const title = document.createElement("div");
-                title.className = "admin-item-title";
-                title.append(name, tag);
+            ...types.map((type) => {
+                const group = openers.filter((opener) => opener.type === type);
+                const heading = document.createElement("h3");
+                heading.textContent = t(`media.type.${type}`);
+                const add = button("chip", t("openers.add"), () => this.handlers.add(type));
+                add.disabled = group.length >= maxPerType;
+                const bar = document.createElement("div");
+                bar.className = "opener-group-bar";
+                bar.append(heading, add);
 
-                const summary = document.createElement("p");
-                summary.className = "sub";
-                summary.textContent = this.summary(opener);
+                const list = document.createElement("ul");
+                list.className = "admin-list";
+                list.append(...group.map((opener, index) => this.item(opener, index, group.length)));
 
-                const text = document.createElement("div");
-                text.className = "admin-item-text";
-                text.append(title, summary);
-
-                const actions = document.createElement("div");
-                actions.className = "admin-actions";
-                actions.append(button("chip", t("admin.edit"), () => this.onEdit(opener)));
-
-                const item = document.createElement("li");
-                item.className = "admin-item";
-                item.append(text, actions);
-                return item;
+                const section = document.createElement("section");
+                section.className = "opener-group";
+                section.dataset.type = type;
+                section.append(bar, list);
+                return section;
             }),
         );
+    }
+
+    item(opener, index, total) {
+        const t = (key) => this.i18n.t(key);
+        const name = document.createElement("span");
+        name.textContent = opener.label || t(`kind.${opener.kind}`);
+        const title = document.createElement("div");
+        title.className = "admin-item-title";
+        title.append(name);
+        if (index === 0) {
+            const first = document.createElement("span");
+            first.className = "kind-tag";
+            first.textContent = t("openers.tag_default"); // le premier ouvre par défaut
+            title.append(first);
+        }
+        const tag = document.createElement("span");
+        tag.className = "kind-tag";
+        tag.textContent = t(`kind.${opener.kind}`);
+        title.append(tag);
+
+        const summary = document.createElement("p");
+        summary.className = "sub";
+        summary.textContent = this.summary(opener);
+
+        const text = document.createElement("div");
+        text.className = "admin-item-text";
+        text.append(title, summary);
+
+        const up = button("chip", "↑", () => this.handlers.move(opener, -1));
+        up.disabled = index === 0;
+        up.setAttribute("aria-label", t("admin.up"));
+        const down = button("chip", "↓", () => this.handlers.move(opener, 1));
+        down.disabled = index === total - 1;
+        down.setAttribute("aria-label", t("admin.down"));
+        const remove = button("chip danger", t("admin.delete"), () => this.handlers.remove(opener));
+        remove.disabled = total === 1; // un type garde toujours un lecteur
+        const actions = document.createElement("div");
+        actions.className = "admin-actions";
+        actions.append(up, down, button("chip", t("admin.edit"), () => this.handlers.edit(opener)), remove);
+
+        const item = document.createElement("li");
+        item.className = "admin-item";
+        item.dataset.id = opener.id;
+        item.append(text, actions);
+        return item;
     }
 }
 
@@ -591,7 +649,8 @@ class OpenerForm {
         this.api = api;
         this.onSaved = onSaved;
         this.meta = null;
-        this.opener = null;
+        this.opener = null; // lecteur modifié ; null pour un ajout
+        this.type = null;
         this.dialog = $("opener-dialog");
         this.picker = new AppPicker(
             i18n,
@@ -608,15 +667,20 @@ class OpenerForm {
         $("opener-kind").addEventListener("change", () => this.showGroup());
     }
 
-    open(meta, opener) {
+    // opener : lecteur à modifier ; null pour en ajouter un au type ``type``
+    open(meta, type, opener = null) {
         this.meta = meta;
+        this.type = type;
         this.opener = opener;
         const t = (key, params) => this.i18n.t(key, params);
-        $("opener-title").textContent = t("openers.edit_title", { type: t(`media.type.${opener.type}`) });
+        $("opener-title").textContent = t(opener ? "openers.edit_title" : "openers.add_title", {
+            type: t(`media.type.${type}`),
+        });
+        $("opener-label").value = opener?.label ?? "";
         this.setError("");
 
         // Une commande déjà enregistrée reste visible et conservable même si les commandes brutes sont interdites
-        const commandAllowed = meta.allow_command || opener.kind === "command";
+        const commandAllowed = meta.allow_command || opener?.kind === "command";
         $("opener-kind").replaceChildren(
             ...meta.kinds.map((kind) => {
                 const option = new Option(t(`kind.${kind}`), kind);
@@ -624,16 +688,17 @@ class OpenerForm {
                 return option;
             }),
         );
-        $("opener-kind").value = opener.kind;
-        this.picker.reset(opener.spec.desktop_id ?? null);
-        $("opener-command").value = (opener.spec.argv ?? []).join("\n");
+        $("opener-kind").value = opener?.kind ?? "default";
+        this.picker.reset(opener?.spec.desktop_id ?? null);
+        $("opener-command").value = (opener?.spec.argv ?? []).join("\n");
 
-        const locked = opener.kind === "command" && !meta.allow_command;
+        const locked = opener?.kind === "command" && !meta.allow_command;
         $("opener-command").disabled = locked;
         $("opener-command-hint").textContent = t(locked ? "openers.command_locked" : "openers.command_help");
 
         this.showGroup();
         this.dialog.showModal();
+        $("opener-label").focus();
     }
 
     showGroup() {
@@ -653,18 +718,29 @@ class OpenerForm {
 
     collect() {
         const kind = $("opener-kind").value;
+        let spec = {};
         if (kind === "app") {
-            return { kind, spec: { desktop_id: this.picker.value } };
+            spec = { desktop_id: this.picker.value };
+        } else if (kind === "command") {
+            spec = { argv: LauncherForm.parseArgv($("opener-command").value) };
         }
-        if (kind === "command") {
-            return { kind, spec: { argv: LauncherForm.parseArgv($("opener-command").value) } };
+        const entry = { kind, spec };
+        const label = $("opener-label").value.trim();
+        // Un lecteur d'avant les noms (nom vide) reste modifiable sans en donner un : le serveur garde l'actuel
+        if (label !== "" || !this.opener || this.opener.label !== "") {
+            entry.label = label;
         }
-        return { kind, spec: {} };
+        return entry;
     }
 
     async submit() {
         try {
-            await this.api.setOpener(this.opener.type, this.collect());
+            const entry = this.collect();
+            if (this.opener) {
+                await this.api.setOpener(this.opener.id, entry);
+            } else {
+                await this.api.createOpener({ ...entry, type: this.type });
+            }
         } catch (error) {
             this.setError(describeError(this.i18n, error));
             return;
@@ -698,7 +774,12 @@ class AdminPage {
             move: (entry, delta) => this.move(entry, delta),
         });
         this.form = new LauncherForm(this.i18n, this.api, () => this.refresh());
-        this.openerList = new OpenerList(this.i18n, (opener) => this.openerForm.open(this.openers, opener));
+        this.openerList = new OpenerList(this.i18n, {
+            add: (type) => this.openers && this.openerForm.open(this.openers, type),
+            edit: (opener) => this.openerForm.open(this.openers, opener.type, opener),
+            remove: (opener) => this.removeOpener(opener),
+            move: (opener, delta) => this.moveOpener(opener, delta),
+        });
         this.openerForm = new OpenerForm(this.i18n, this.api, () => this.refresh());
 
         $("admin-add").addEventListener("click", () => this.data && this.form.open(this.data));
@@ -738,7 +819,7 @@ class AdminPage {
             this.list.render(this.data.launchers, this.data.browsers);
         }
         if (this.openers) {
-            this.openerList.render(this.openers.openers);
+            this.openerList.render(this.openers.openers, this.openers.max_per_type);
         }
     }
 
@@ -769,6 +850,25 @@ class AdminPage {
             return Promise.resolve();
         }
         return this.apply(() => this.api.remove(entry.id));
+    }
+
+    moveOpener(opener, delta) {
+        const ids = this.openers.openers.filter((other) => other.type === opener.type).map((other) => other.id);
+        const from = ids.indexOf(opener.id);
+        const to = from + delta;
+        if (from < 0 || to < 0 || to >= ids.length) {
+            return Promise.resolve();
+        }
+        [ids[from], ids[to]] = [ids[to], ids[from]];
+        return this.apply(() => this.api.reorderOpeners(opener.type, ids));
+    }
+
+    removeOpener(opener) {
+        const name = opener.label || this.i18n.t(`kind.${opener.kind}`);
+        if (!window.confirm(this.i18n.t("admin.confirm_delete", { name }))) {
+            return Promise.resolve();
+        }
+        return this.apply(() => this.api.removeOpener(opener.id));
     }
 }
 

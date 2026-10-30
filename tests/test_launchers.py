@@ -1,5 +1,6 @@
 """Tests des lanceurs : stockage SQLite, validation, construction de la commande, applications .desktop."""
 
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ from unittest import mock
 from mediadeck import launchers
 from mediadeck.config import Launcher as ConfigLauncher
 from mediadeck.launchers import (
+    MAX_OPENERS_PER_TYPE,
     CommandNotAllowed,
     LauncherEntry,
     LauncherError,
@@ -198,44 +200,129 @@ class OpenerStoreTest(unittest.TestCase):
         self.store.close()
         self._tmp.cleanup()
 
+    def ids(self, media_type: str) -> list[str]:
+        return [entry.id for entry in self.store.openers()[media_type]]
+
     def test_system_default_until_one_is_chosen(self) -> None:
         openers = self.store.openers()
         self.assertEqual(list(openers), ["audio", "image", "video"])
-        self.assertTrue(all(opener.kind == "default" and opener.spec == {} for opener in openers.values()))
+        for media_type, entries in openers.items():
+            (entry,) = entries
+            self.assertEqual((entry.id, entry.label, entry.kind, entry.spec), (media_type, "", "default", {}))
 
-    def test_set_replaces_and_survives_reopening(self) -> None:
-        self.store.set_opener("video", "app", {"desktop_id": "vlc.desktop"})
-        self.store.set_opener("video", "command", {"argv": ["mpv", "--fs"]})
+    def test_several_players_per_type_in_order_and_surviving_reopening(self) -> None:
+        mpv = self.store.create_opener("video", "mpv", "command", {"argv": ["mpv", "--fs"]})
+        vlc = self.store.create_opener("video", "VLC", "app", {"desktop_id": "vlc.desktop"})
+        # Le lecteur implicite devient le premier (par défaut) dès qu'on en ajoute un
+        self.assertEqual(self.ids("video"), ["video", mpv.id, vlc.id])
+        self.assertEqual(self.ids("audio"), ["audio"])  # les autres types ne changent pas
         self.store.close()
         self.store = LauncherStore(self.path)
-        openers = self.store.openers()
-        self.assertEqual((openers["video"].kind, openers["video"].spec), ("command", {"argv": ["mpv", "--fs"]}))
-        self.assertEqual(openers["audio"].kind, "default")
+        self.assertEqual(self.ids("video"), ["video", "mpv", "vlc"])
+        self.assertEqual(self.store.get_opener("mpv"), mpv)
+
+    def test_ids_come_from_the_label_and_never_collide_with_a_type(self) -> None:
+        self.assertEqual(self.store.create_opener("audio", "Mon lecteur", "default", {}).id, "mon-lecteur")
+        self.assertEqual(self.store.create_opener("video", "Mon lecteur", "default", {}).id, "mon-lecteur-2")
+        self.assertEqual(self.store.create_opener("image", "Video", "default", {}).id, "video-2")  # « video » désigne un type
+        self.assertEqual(self.store.create_opener("image", "!!!", "default", {}).id, "player")
+
+    def test_update_of_the_implicit_player_registers_it(self) -> None:
+        updated = self.store.update_opener("audio", "Rhythmbox", "app", {"desktop_id": "rb.desktop"})
+        self.assertEqual((updated.id, updated.label, updated.kind), ("audio", "Rhythmbox", "app"))
+        self.assertEqual(self.ids("audio"), ["audio"])
+        self.assertEqual(self.store.openers()["audio"][0].spec, {"desktop_id": "rb.desktop"})
+        with self.assertRaises(LauncherNotFound):
+            self.store.update_opener("inconnu", "x", "default", {})
+
+    def test_reorder_changes_the_default(self) -> None:
+        self.store.create_opener("video", "mpv", "default", {})
+        self.store.create_opener("video", "vlc", "default", {})
+        self.store.reorder_openers("video", ["vlc", "video", "mpv"])
+        self.assertEqual(self.ids("video"), ["vlc", "video", "mpv"])
+        for bad in (["vlc", "video"], ["vlc", "video", "mpv", "mpv"], ["vlc", "video", "autre"], []):
+            with self.subTest(ids=bad), self.assertRaises(LauncherError):
+                self.store.reorder_openers("video", bad)
+        with self.assertRaises(LauncherNotFound):
+            self.store.reorder_openers("document", [])
+
+    def test_a_type_always_keeps_a_player(self) -> None:
+        self.store.create_opener("video", "mpv", "default", {})
+        self.store.delete_opener("mpv")
+        with self.assertRaises(LauncherError):
+            self.store.delete_opener("video")  # le dernier
+        self.store.create_opener("video", "vlc", "default", {})
+        self.store.delete_opener("video")  # le premier part, l'ordre se resserre
+        self.assertEqual(self.ids("video"), ["vlc"])
+        with self.assertRaises(LauncherNotFound):
+            self.store.delete_opener("inconnu")
+
+    def test_limit_per_type(self) -> None:
+        for number in range(MAX_OPENERS_PER_TYPE - 1):  # le lecteur implicite compte pour un
+            self.store.create_opener("audio", f"lecteur {number}", "default", {})
+        with self.assertRaises(LauncherError):
+            self.store.create_opener("audio", "de trop", "default", {})
 
     def test_database_refuses_unknown_types(self) -> None:
         with self.assertRaises(Exception):
-            self.store.set_opener("document", "default", {})
+            self.store.create_opener("document", "x", "default", {})
 
     def test_opener_table_added_to_an_existing_database(self) -> None:
         # Base créée avant les lecteurs : seule la table des lanceurs existe
         self.store.close()
-        import sqlite3
-
         db = sqlite3.connect(self.path)
-        db.execute("DROP TABLE media_openers")
+        db.execute("DROP TABLE media_players")
         db.commit()
         db.close()
         self.store = LauncherStore(self.path)
-        self.assertEqual(self.store.openers()["audio"].kind, "default")
+        self.assertEqual(self.store.openers()["audio"][0].kind, "default")
+
+    def test_single_players_of_the_previous_version_are_migrated(self) -> None:
+        # Base d'avant les lecteurs multiples : une ligne par type dans media_openers
+        self.store.close()
+        db = sqlite3.connect(self.path)
+        db.execute("DROP TABLE media_players")
+        db.execute(
+            "CREATE TABLE media_openers (type TEXT PRIMARY KEY, kind TEXT NOT NULL, spec TEXT NOT NULL)"
+        )
+        db.execute("INSERT INTO media_openers VALUES ('video', 'command', '{\"argv\": [\"mpv\", \"--fs\"]}')")
+        db.execute("INSERT INTO media_openers VALUES ('audio', 'app', '{\"desktop_id\": \"rb.desktop\"}')")
+        db.commit()
+        db.close()
+        self.store = LauncherStore(self.path)
+        video = self.store.openers()["video"]
+        self.assertEqual([(e.id, e.label, e.kind, e.spec) for e in video], [("video", "", "command", {"argv": ["mpv", "--fs"]})])
+        self.assertEqual(self.store.openers()["audio"][0].spec, {"desktop_id": "rb.desktop"})
+        self.assertEqual(self.store.openers()["image"][0].kind, "default")
+        self.store.close()
+        self.store = LauncherStore(self.path)  # la migration ne se rejoue pas
+        self.assertEqual(self.ids("video"), ["video"])
+        tables = {row[0] for row in sqlite3.connect(self.path).execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        self.assertNotIn("media_openers", tables)
 
 
 class ValidateOpenerTest(unittest.TestCase):
     def test_default_needs_no_spec(self) -> None:
-        self.assertEqual(validate_opener("audio", {"kind": "default"}, allow_command=False), ("audio", "default", {}))
+        self.assertEqual(
+            validate_opener("audio", {"label": "Système", "kind": "default"}, allow_command=False),
+            ("audio", "Système", "default", {}),
+        )
         # Un spec fourni avec « default » est ignoré : rien d'autre n'est enregistré
         self.assertEqual(
-            validate_opener("audio", {"kind": "default", "spec": {"argv": ["rm"]}}, allow_command=False),
-            ("audio", "default", {}),
+            validate_opener("audio", {"label": "x", "kind": "default", "spec": {"argv": ["rm"]}}, allow_command=False),
+            ("audio", "x", "default", {}),
+        )
+
+    def test_label_is_required_to_create_and_optional_to_update(self) -> None:
+        for label in (None, "", "   ", 3, "x" * 41):
+            with self.subTest(label=label), self.assertRaises(LauncherError):
+                validate_opener("audio", {"label": label, "kind": "default"}, allow_command=False)
+        with self.assertRaises(LauncherError):
+            validate_opener("audio", {"kind": "default"}, allow_command=False)
+        current = OpenerEntry("audio", "audio", "Mon lecteur", "default", {})
+        self.assertEqual(validate_opener("audio", {"kind": "default"}, allow_command=False, current=current)[1], "Mon lecteur")
+        self.assertEqual(
+            validate_opener("audio", {"label": "  Autre ", "kind": "default"}, allow_command=False, current=current)[1], "Autre"
         )
 
     def test_app_must_be_installed(self) -> None:
@@ -243,27 +330,33 @@ class ValidateOpenerTest(unittest.TestCase):
             write_desktop(Path(tmp), "vlc.desktop", "vlc")
             with mock.patch("mediadeck.launchers.desktop_dirs", return_value=[Path(tmp)]):
                 self.assertEqual(
-                    validate_opener("video", {"kind": "app", "spec": {"desktop_id": "vlc.desktop"}}, allow_command=False),
-                    ("video", "app", {"desktop_id": "vlc.desktop"}),
+                    validate_opener("video", {"label": "VLC", "kind": "app", "spec": {"desktop_id": "vlc.desktop"}}, allow_command=False),
+                    ("video", "VLC", "app", {"desktop_id": "vlc.desktop"}),
                 )
                 with self.assertRaises(LauncherError):
-                    validate_opener("video", {"kind": "app", "spec": {"desktop_id": "../vlc.desktop"}}, allow_command=False)
+                    validate_opener("video", {"label": "VLC", "kind": "app", "spec": {"desktop_id": "../vlc.desktop"}}, allow_command=False)
 
     def test_command_needs_the_config_switch(self) -> None:
-        data = {"kind": "command", "spec": {"argv": ["mpv", "--fs"]}}
+        data = {"label": "mpv", "kind": "command", "spec": {"argv": ["mpv", "--fs"]}}
         with self.assertRaises(CommandNotAllowed):
             validate_opener("video", data, allow_command=False)
-        self.assertEqual(validate_opener("video", data, allow_command=True), ("video", "command", {"argv": ["mpv", "--fs"]}))
+        self.assertEqual(
+            validate_opener("video", data, allow_command=True), ("video", "mpv", "command", {"argv": ["mpv", "--fs"]})
+        )
         # Une commande déjà enregistrée peut être « réenregistrée » telle quelle
-        current = OpenerEntry("video", "command", {"argv": ["mpv", "--fs"]})
-        self.assertEqual(validate_opener("video", data, allow_command=False, current=current)[1], "command")
+        current = OpenerEntry("mpv", "video", "mpv", "command", {"argv": ["mpv", "--fs"]})
+        self.assertEqual(validate_opener("video", data, allow_command=False, current=current)[2], "command")
+        evil = {"label": "mpv", "kind": "command", "spec": {"argv": ["evil"]}}
         with self.assertRaises(CommandNotAllowed):
-            validate_opener("video", {"kind": "command", "spec": {"argv": ["evil"]}}, allow_command=False, current=current)
+            validate_opener("video", evil, allow_command=False, current=current)
 
     def test_rejected_input(self) -> None:
         with self.assertRaises(LauncherNotFound):
-            validate_opener("document", {"kind": "default"}, allow_command=True)
-        for data in (None, [], {}, {"kind": "web"}, {"kind": "command"}, {"kind": "command", "spec": {"argv": []}}):
+            validate_opener("document", {"label": "x", "kind": "default"}, allow_command=True)
+        for data in (
+            None, [], {}, {"label": "x"}, {"label": "x", "kind": "web"}, {"label": "x", "kind": "command"},
+            {"label": "x", "kind": "command", "spec": {"argv": []}},
+        ):
             with self.subTest(data=data), self.assertRaises(LauncherError):
                 validate_opener("audio", data, allow_command=True)
 
@@ -273,14 +366,14 @@ class BuildOpenArgvTest(unittest.TestCase):
 
     def test_default_uses_gio_open(self) -> None:
         with mock.patch("mediadeck.launchers.shutil.which", return_value="/usr/bin/gio"):
-            self.assertEqual(build_open_argv(OpenerEntry("audio", "default", {}), self.PATH), ["gio", "open", str(self.PATH)])
+            self.assertEqual(build_open_argv(OpenerEntry("audio", "audio", "", "default", {}), self.PATH), ["gio", "open", str(self.PATH)])
         with mock.patch("mediadeck.launchers.shutil.which", return_value=None), self.assertRaises(LauncherError):
-            build_open_argv(OpenerEntry("audio", "default", {}), self.PATH)
+            build_open_argv(OpenerEntry("audio", "audio", "", "default", {}), self.PATH)
 
     def test_app_uses_gio_launch_with_the_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             write_desktop(Path(tmp), "vlc.desktop", "vlc")
-            opener = OpenerEntry("video", "app", {"desktop_id": "vlc.desktop"})
+            opener = OpenerEntry("video", "video", "VLC", "app", {"desktop_id": "vlc.desktop"})
             with mock.patch("mediadeck.launchers.desktop_dirs", return_value=[Path(tmp)]), \
                     mock.patch("mediadeck.launchers.shutil.which", return_value="/usr/bin/gio"):
                 self.assertEqual(build_open_argv(opener, self.PATH), ["gio", "launch", str(Path(tmp) / "vlc.desktop"), str(self.PATH)])
@@ -288,7 +381,7 @@ class BuildOpenArgvTest(unittest.TestCase):
                 build_open_argv(opener, self.PATH)
 
     def test_command_gets_the_path_as_last_argument_without_a_shell(self) -> None:
-        opener = OpenerEntry("video", "command", {"argv": ["mpv", "--fs"]})
+        opener = OpenerEntry("mpv", "video", "mpv", "command", {"argv": ["mpv", "--fs"]})
         self.assertEqual(build_open_argv(opener, self.PATH), ["mpv", "--fs", str(self.PATH)])
         tricky = Path("/home/u/V/$(reboot); rm -rf x.mkv")
         self.assertEqual(build_open_argv(opener, tricky)[-1], str(tricky))
