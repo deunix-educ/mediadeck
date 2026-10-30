@@ -312,7 +312,9 @@ class MprisManager:
         player = Player(name, root, player_iface, props)
 
         def on_properties_changed(interface: str, _changed: dict[str, Any], _invalidated: list[str]) -> None:
-            if interface in (PLAYER_IFACE, ROOT_IFACE):
+            # Un lecteur pas encore inscrit est en cours de rattachement : son ajout en attente (la tâche qui exécute
+            # cette tentative) ne doit pas être remplacé, et sa lecture initiale verra déjà ce changement
+            if interface in (PLAYER_IFACE, ROOT_IFACE) and self._players.get(name) is player:
                 self._schedule(name, self._refresh(player))
 
         def on_seeked(position: int) -> None:

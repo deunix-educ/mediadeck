@@ -185,6 +185,34 @@ class MprisDiscoveryTest(unittest.IsolatedAsyncioTestCase):
             _bus, _player = await self.open_player("slow", export_after=1.0)
             self.assertTrue(await self.until(self.has_title("slow")))
 
+    async def test_signal_during_an_attach_attempt_does_not_cancel_the_attach(self) -> None:
+        # Une tentative est en cours (lecture initiale lente) quand le lecteur annonce un changement : ce signal ne doit
+        # pas remplacer l'ajout en attente, sinon le lecteur n'est jamais listé et plus aucune tentative n'a lieu
+        gate = asyncio.Event()
+        original = mpris.Player.refresh
+        calls = 0
+
+        async def slow_first_refresh(player: mpris.Player) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                await gate.wait()
+            await original(player)
+
+        with mock.patch.object(mpris.Player, "refresh", slow_first_refresh):
+            _bus, player = await self.open_player("busy")
+            self.assertTrue(await self.until(self.attempt_started(lambda: calls)))
+            player.emit_properties_changed({"PlaybackStatus": "Playing"})
+            await asyncio.sleep(0.3)  # laisse le signal arriver jusqu'au gestionnaire
+            gate.set()
+            self.assertTrue(await self.until(self.has_title("busy")))
+
+    def attempt_started(self, count: Callable[[], int]) -> Callable[[], Awaitable[bool]]:
+        async def check() -> bool:
+            return count() > 0
+
+        return check
+
     async def test_waiting_for_a_player_stops_when_it_leaves_the_bus(self) -> None:
         self.silence_expected_errors()
         with (
