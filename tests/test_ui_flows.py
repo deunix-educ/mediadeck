@@ -8,6 +8,9 @@ Ignoré sans Chromium ni dbus-daemon.
 
 import asyncio
 import json
+import os
+import shutil
+import subprocess
 import unittest
 import warnings
 from collections.abc import Callable
@@ -28,10 +31,11 @@ def js(value: Any) -> str:
 @unittest.skipUnless(CHROMIUM and DBUS_DAEMON, "Chromium and dbus-daemon are required")
 class UiCase(unittest.IsolatedAsyncioTestCase):
     libraries: tuple[str, ...] = ("Musique", "Videos")
+    thumbnails = False
 
     async def asyncSetUp(self) -> None:
         warnings.filterwarnings("ignore", message="unclosed <socket", category=ResourceWarning)
-        self.stack = Stack(self.libraries)
+        self.stack = Stack(self.libraries, self.thumbnails)
         await self.stack.start()
         self.addAsyncCleanup(self.stack.close)
         self.browser = Browser()
@@ -68,8 +72,6 @@ class UiCase(unittest.IsolatedAsyncioTestCase):
         response = await self.stack.client.request(method, path, headers=headers, **kwargs)
         return response.status, (await response.json() if response.content_type == "application/json" else None)
 
-
-class MediaTabTest(UiCase):
     async def tiles(self) -> list[tuple[str, str]]:
         raw = await self.browser.evaluate(
             f"JSON.stringify([...document.querySelectorAll('#media-grid .media-tile')]"
@@ -85,11 +87,21 @@ class MediaTabTest(UiCase):
         self.assertEqual(await self.tiles(), expected)
 
     async def click_tile(self, name: str) -> None:
+        await self.wait_tile(name)
         await self.browser.evaluate(
             f"[...document.querySelectorAll('#media-grid .media-tile')]"
             f".find((tile) => tile.querySelector('{TILE_LABEL}').textContent === {js(name)}).click()"
         )
 
+    async def wait_tile(self, name: str) -> None:
+        for _ in range(100):
+            if name in [label for _kind, label in await self.tiles()]:
+                return
+            await asyncio.sleep(0.05)
+        self.assertIn(name, [label for _kind, label in await self.tiles()])
+
+
+class MediaTabTest(UiCase):
     async def crumbs(self) -> list[str]:
         raw = await self.browser.evaluate(
             "JSON.stringify([...document.querySelectorAll('#media-crumbs .crumb')].map((crumb) => crumb.textContent))"
@@ -168,6 +180,91 @@ class MediaTabTest(UiCase):
         await self.browser.evaluate("document.getElementById('media-up').click()")
         await self.wait_tiles([("dir", "Musique"), ("dir", "Videos")])
         self.assertEqual(await self.browser.evaluate("document.getElementById('media-search').value"), "")
+
+
+    async def tri_folder(self) -> list[str]:
+        """Dossier « Tri » : noms dans l'ordre alphabétique a, b, c ; dates et tailles dans trois autres ordres."""
+        folder = self.stack.videos / "Tri"
+        folder.mkdir()
+        for name, size, mtime in (("a.mp4", 10, 1_700_000_300), ("b.mp4", 1000, 1_700_000_100), ("c.mp4", 100, 1_700_000_200)):
+            (folder / name).write_bytes(b"x" * size)
+            os.utime(folder / name, (mtime, mtime))
+        return ["a.mp4", "b.mp4", "c.mp4"]
+
+    async def files(self) -> list[str]:
+        return [name for kind, name in await self.tiles() if kind != "dir"]
+
+    async def choose_sort(self, value: str) -> None:
+        await self.browser.evaluate(
+            f"(() => {{ const box = document.getElementById('media-sort'); box.value = {js(value)};"
+            " box.dispatchEvent(new Event('change')); })()"
+        )
+
+    async def test_sort_by_date_and_size_is_remembered(self) -> None:
+        await self.tri_folder()
+        await self.open_remote()
+        await self.select_tab("media")
+        await self.wait_tiles([("dir", "Musique"), ("dir", "Videos")])
+        self.assertTrue(await self.browser.evaluate("document.getElementById('media-sort').hidden"))  # pas dans la liste des dossiers
+        await self.click_tile("Videos")
+        await self.wait_tiles([("dir", "Films"), ("dir", "Tri"), ("video", "clip.mp4")])
+        await self.click_tile("Tri")
+        await self.wait_tiles([("video", "a.mp4"), ("video", "b.mp4"), ("video", "c.mp4")])
+        self.assertEqual(await self.browser.evaluate("document.getElementById('media-sort').value"), "name")
+
+        await self.choose_sort("date")  # le plus récent d'abord
+        self.assertEqual(await self.files(), ["a.mp4", "c.mp4", "b.mp4"])
+        await self.choose_sort("size")  # le plus gros d'abord
+        self.assertEqual(await self.files(), ["b.mp4", "c.mp4", "a.mp4"])
+
+        # Les dossiers restent en tête quel que soit le tri
+        await self.browser.evaluate("document.getElementById('media-up').click()")
+        await self.wait_tiles([("dir", "Films"), ("dir", "Tri"), ("video", "clip.mp4")])
+
+        # Le choix survit à un rechargement de la page
+        await self.open_remote()
+        await self.select_tab("media")
+        await self.click_tile("Videos")
+        await self.click_tile("Tri")
+        await self.wait_tiles([("video", "b.mp4"), ("video", "c.mp4"), ("video", "a.mp4")])
+        self.assertEqual(await self.browser.evaluate("document.getElementById('media-sort').value"), "size")
+
+
+@unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg is required")
+class ThumbnailTest(UiCase):
+    libraries = ("Videos",)
+    thumbnails = True
+
+    def make_media(self) -> None:
+        folder = self.stack.videos / "Medias"
+        folder.mkdir()
+        ffmpeg = ["ffmpeg", "-v", "error", "-y", "-f", "lavfi"]
+        subprocess.run([*ffmpeg, "-i", "testsrc=duration=1:size=96x64:rate=5", "-c:v", "mpeg4", str(folder / "film.mp4")], check=True)
+        subprocess.run([*ffmpeg, "-i", "sine=duration=1", "-c:a", "flac", str(folder / "son.flac")], check=True)  # sans pochette
+
+    async def test_video_gets_a_thumbnail_and_a_sound_without_cover_keeps_its_icon(self) -> None:
+        await asyncio.to_thread(self.make_media)
+        await self.open_remote()
+        await self.select_tab("media")
+        await self.click_tile("Medias")
+        probe = (
+            "JSON.stringify([...document.querySelectorAll('#media-grid .media-tile')].map((tile) => "
+            f"[tile.querySelector('{TILE_LABEL}').textContent, tile.classList.contains('has-thumb'), "
+            "tile.querySelector('img.thumb')?.naturalWidth ?? 0, tile.querySelector('svg') !== null]))"
+        )
+
+        async def tiles() -> dict[str, list[Any]]:
+            return {name: rest for name, *rest in json.loads(await self.browser.evaluate(probe))}
+
+        # La vidéo : une vraie image chargée depuis /thumb. Le son : l'image échoue (404), l'icône revient
+        for _ in range(200):
+            found = await tiles()
+            if found.get("film.mp4", [False, 0])[1] > 0 and found.get("son.flac") == [False, 0, True]:
+                break
+            await asyncio.sleep(0.1)
+        found = await tiles()
+        self.assertTrue(found["film.mp4"][0] and found["film.mp4"][1] > 0, found)
+        self.assertEqual(found["son.flac"], [False, 0, True], found)
 
 
 class MediaDisabledTest(UiCase):

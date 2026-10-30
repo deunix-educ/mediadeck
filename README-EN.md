@@ -11,7 +11,7 @@ The PC runs a small Python bridge; the tablet only needs a browser.
 |---|---|---|
 | **Playing** | Cover art (or, failing that, an image of the file played), title (or file name), progress, play/pause, next/previous, shuffle, repeat, player volume, player selection | MPRIS (session D-Bus): Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
 | | **Volume bar** under the player: master volume, mute; the active output's button opens a window with the output selection (HDMI, Bluetooth…) and per-output volume; the bar is always visible | `pactl` (PipeWire or PulseAudio) |
-| **Media** | Sound, image and video files from the PC's folders, as icons (thumbnails for images) with search; a tap opens the file **on the PC** with the player chosen for its type | `gio`; folders and players: see "Media" |
+| **Media** | Sound, image and video files from the PC's folders, as icons or thumbnails, with search and sorting (name, date, size); a tap opens the file **on the PC** with the player chosen for its type | `gio`; folders and players: see "Media" |
 | **Touchpad** | Touchpad (click, right click, 2-finger scroll), D-pad, Esc, Space, F, F11…, text entry with the tablet's keyboard | `/dev/uinput`: works on X11 **and** Wayland |
 | **Launchers** | Configurable buttons: websites and installed applications (`/admin` page) | browser, `gio launch` |
 | **System** | Lock, sleep, restart, shut down (1 s long press): sensitive operations, kept apart from launchers | logind, `org.freedesktop.ScreenSaver` |
@@ -176,9 +176,14 @@ PC**; the tablet stays a remote control.
 - **Search**: the "Search…" field looks in file and folder **names** (ignoring accents and case, every word must appear)
   in the folder shown and its subfolders, or in all folders from the first level. Results show their folder; a tap
   opens the file or folder. At most 300 results and 4 seconds; links are followed, without scanning a folder twice (no loops).
-- **Thumbnails**: images (jpg, png, gif, webp, bmp, tiff; not HEIC or AVIF) are shown as thumbnails, made by `ffmpeg`
-  (`apt install ffmpeg`, installed by `make deps`) and kept in `~/.cache/mediadeck/thumbs` (3000 files at most).
-  Without ffmpeg, or for an unreadable image, the icon stays. `[media] thumbnails = false` turns them off.
+- **Thumbnails**: images (jpg, png, gif, webp, bmp, tiff; not HEIC or AVIF), videos (a frame of the film, or a poster in
+  the folder) and sounds (embedded cover or a picture in the folder) are shown as thumbnails, made by `ffmpeg`
+  (`apt install ffmpeg`, installed by `make deps`) and kept in `~/.cache/mediadeck/thumbs` (3000 files at most). They
+  are only made for the tiles on screen; a video on a network drive may take a few seconds the first time. Without
+  ffmpeg, or when there is no picture to show (a sound without a cover), the icon stays. `[media] thumbnails = false`
+  turns them off.
+- **Sorting**: a selector next to the filters orders files by name (natural order, the default), by date (newest
+  first) or by size (largest first); folders always stay first. The choice is remembered on the tablet.
 - **Title and image in the Playing tab**: when a player plays a file from a configured folder, the tab shows its title
   (the file name if the player gives none) and an image: the player's own, else an image from the folder
   (`<name>.jpg`, `<name>-poster.jpg`, `poster.jpg`, `cover.jpg`, `folder.jpg`…), else the cover embedded in a sound file

@@ -73,14 +73,19 @@ class ListingTest(LibraryCase):
             ["CD 2", "CD 10", "Piste 1.mp3", "piste 2.mp3", "piste 10.mp3"],
         )
 
-    def test_images_carry_their_modification_date_for_thumbnail_caching(self) -> None:
+    def test_files_carry_their_date_and_size_but_folders_do_not(self) -> None:
+        # La date versionne l'adresse de la miniature ; date et taille servent au tri côté client
         touch(self.root / "a.jpg")
         touch(self.root / "b.mp3")
+        touch(self.root / "c.mkv")
+        (self.root / "b.mp3").write_bytes(b"x" * 1234)
         (self.root / "Dossier").mkdir()
         os.utime(self.root / "a.jpg", (1_700_000_000, 1_700_000_000))
+        os.utime(self.root / "b.mp3", (1_700_000_500, 1_700_000_500))
         entries = {entry["name"]: entry for entry in self.library.list("musique", "")["entries"]}
-        self.assertEqual(entries["a.jpg"], {"name": "a.jpg", "kind": "image", "v": 1_700_000_000})
-        self.assertEqual(entries["b.mp3"], {"name": "b.mp3", "kind": "audio"})
+        self.assertEqual(entries["a.jpg"]["v"], 1_700_000_000)
+        self.assertEqual(entries["b.mp3"], {"name": "b.mp3", "kind": "audio", "v": 1_700_000_500, "size": 1234})
+        self.assertEqual(set(entries["c.mkv"]), {"name", "kind", "v", "size"})  # vidéo aussi
         self.assertEqual(entries["Dossier"], {"name": "Dossier", "kind": "dir"})
 
     def test_subfolder_and_parent(self) -> None:
@@ -360,11 +365,11 @@ class SearchTest(LibraryCase):
         self.assertEqual({entry["root"] for entry in result["entries"]}, {"musique", "videos"})
         self.assertIsNone(result["root"])
 
-    def test_image_results_carry_their_version(self) -> None:
+    def test_results_carry_their_version_and_size(self) -> None:
         os.utime(self.root / "Photos" / "ete-2020.JPG", (1_700_000_000, 1_700_000_000))
         result = self.library.search("2020", "musique")
         self.assertEqual(result["entries"], [
-            {"name": "ete-2020.JPG", "kind": "image", "v": 1_700_000_000, "root": "musique", "folder": "Photos"}])
+            {"name": "ete-2020.JPG", "kind": "image", "v": 1_700_000_000, "size": 1, "root": "musique", "folder": "Photos"}])
 
     def test_link_loops_do_not_hang_or_duplicate_results(self) -> None:
         os.symlink(self.root, self.root / "Rock" / "boucle")  # boucle vers la racine

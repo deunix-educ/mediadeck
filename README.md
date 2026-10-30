@@ -11,7 +11,7 @@ Le PC exécute un petit pont Python ; la tablette n'a besoin que d'un navigateur
 |---|---|---|
 | **Lecture** | Pochette (ou, à défaut, image du fichier joué), titre (ou nom du fichier), progression, lecture/pause, suivant/précédent, aléatoire, répétition, volume du lecteur, choix du lecteur | MPRIS (D-Bus de session) : Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
 | | **Barre de volume** sous le lecteur : volume principal, sourdine ; le bouton de la sortie active ouvre une fenêtre avec le choix de la sortie (HDMI, Bluetooth…) et le volume par sortie ; la barre reste toujours visible | `pactl` (PipeWire ou PulseAudio) |
-| **Médias** | Fichiers son, image et vidéo des dossiers du PC, en icônes (miniatures pour les images) avec recherche ; un appui ouvre le fichier **sur le PC** avec le lecteur choisi pour son type | `gio` ; dossiers et lecteurs : voir « Médias » |
+| **Médias** | Fichiers son, image et vidéo des dossiers du PC, en icônes ou miniatures, avec recherche et tri (nom, date, taille) ; un appui ouvre le fichier **sur le PC** avec le lecteur choisi pour son type | `gio` ; dossiers et lecteurs : voir « Médias » |
 | **Pavé** | Pavé tactile (clic, clic droit, défilement 2 doigts), croix directionnelle, Échap, Espace, F, F11…, saisie de texte avec le clavier de la tablette | `/dev/uinput` : fonctionne sous X11 **et** Wayland |
 | **Lanceurs** | Boutons configurables : sites web et applications installées (page `/admin`) | navigateur, `gio launch` |
 | **Système** | Verrouillage, veille, redémarrage, extinction (appui long 1 s) : opérations délicates, séparées des lanceurs | logind, `org.freedesktop.ScreenSaver` |
@@ -178,9 +178,15 @@ Un appui sur un fichier l'**ouvre sur le PC** ; la tablette reste une télécomm
   les mots doivent y figurer) dans le dossier affiché et ses sous-dossiers, ou dans tous les dossiers depuis le
   premier niveau. Les résultats indiquent leur dossier ; un appui ouvre le fichier ou le dossier. Au plus 300
   résultats, 4 secondes ; les liens sont suivis, sans parcourir deux fois le même dossier (pas de boucle).
-- **Miniatures** : les images (jpg, png, gif, webp, bmp, tiff ; pas HEIC ni AVIF) s'affichent en miniature, fabriquées par
+- **Miniatures** : les images (jpg, png, gif, webp, bmp, tiff ; pas HEIC ni AVIF), les vidéos (une image du film, ou une
+  affiche du dossier) et les sons (pochette intégrée ou image du dossier) s'affichent en miniature, fabriquées par
   `ffmpeg` (`apt install ffmpeg`, installé par `make deps`) et gardées dans `~/.cache/mediadeck/thumbs` (3000 fichiers
-  au plus). Sans ffmpeg, ou pour une image illisible, l'icône reste. `[media] thumbnails = false` les désactive.
+  au plus). Elles ne se fabriquent que pour les tuiles affichées à l'écran ; une vidéo sur un disque réseau peut mettre
+  quelques secondes la première fois. Sans ffmpeg, ou quand il n'y a aucune image à montrer (un son sans pochette),
+  l'icône reste. `[media] thumbnails = false` les désactive.
+- **Tri** : un sélecteur à côté des filtres range les fichiers par nom (ordre naturel, par défaut), par date (les plus
+  récents d'abord) ou par taille (les plus gros d'abord) ; les dossiers restent en tête. Le choix est mémorisé sur la
+  tablette.
 - **Titre et image dans l'onglet Lecture** : quand un lecteur joue un fichier d'un dossier configuré, l'onglet montre son
   titre (le nom du fichier si le lecteur n'en donne pas) et une image : celle du lecteur, sinon une image du dossier
   (`<nom>.jpg`, `<nom>-poster.jpg`, `poster.jpg`, `cover.jpg`, `folder.jpg`…), sinon la pochette intégrée d'un fichier

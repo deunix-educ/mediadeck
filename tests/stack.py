@@ -20,6 +20,7 @@ from mediadeck import server as server_module
 from mediadeck.config import parse_config
 from mediadeck.launchers import LauncherStore
 from mediadeck.server import MediaDeckServer
+from mediadeck.thumbs import Thumbnailer
 
 DBUS_DAEMON = shutil.which("dbus-daemon")
 TOKEN = "t" * 32
@@ -70,9 +71,11 @@ DESKTOP_ENTRY = "[Desktop Entry]\nType=Application\nName=Fake application\nExec=
 class Stack:
     """Serveur réel + bibliothèque de médias + faux programmes. ``await start()``, puis ``await close()``."""
 
-    def __init__(self, libraries: tuple[str, ...] = ("Musique",)) -> None:
+    def __init__(self, libraries: tuple[str, ...] = ("Musique",), thumbnails: bool = False) -> None:
         # libraries : dossiers de médias à créer et à déclarer ; vide = onglet Médias désactivé
+        # thumbnails : miniatures par le vrai ffmpeg (cache dans le dossier temporaire)
         self.libraries = libraries
+        self.thumbnails = thumbnails
         self.address = ""
 
     async def start(self) -> None:
@@ -135,12 +138,17 @@ class Stack:
             {
                 "server": {"token": TOKEN, "host": "127.0.0.1"},
                 "features": {"input": False, "power": False},
-                "media": {"roots": [str(tmp / name) for name in self.libraries], "thumbnails": False},
+                "media": {"roots": [str(tmp / name) for name in self.libraries], "thumbnails": self.thumbnails},
                 "launchers": [{"id": "rec", "label": "Recorder", "command": ["recorder", "--fs", "$(reboot)"]}],
             }
         )
         store = LauncherStore(tmp / "launchers.db")
-        with mock.patch.object(server_module, "LauncherStore", lambda: store):
+        # Le cache des miniatures est choisi à l'import du module : on l'impose pour ne pas écrire dans ~/.cache
+        thumbnailer = lambda: Thumbnailer(cache_dir=tmp / "cache" / "thumbs")  # noqa: E731
+        with (
+            mock.patch.object(server_module, "LauncherStore", lambda: store),
+            mock.patch.object(server_module, "Thumbnailer", thumbnailer),
+        ):
             self.deck = MediaDeckServer(config)
         self.client = TestClient(TestServer(self.deck.build_app()))
         await self.client.start_server()

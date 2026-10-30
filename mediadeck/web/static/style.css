@@ -782,6 +782,11 @@ input[type="range"]:disabled {
     scrollbar-width: none;
 }
 
+.media-sort {
+    flex: none;
+    width: auto;
+}
+
 .media-search {
     flex: 1 1 220px;
     min-width: 0;
@@ -838,6 +843,12 @@ input[type="range"]:disabled {
 
 .media-tile.has-thumb {
     padding: 8px 8px 10px;
+}
+
+/* Miniature d'une vidéo ou d'un son : la couleur du type reste visible (une image n'a pas de liseré) */
+.media-tile.has-thumb[data-kind="audio"],
+.media-tile.has-thumb[data-kind="video"] {
+    border-color: color-mix(in srgb, var(--tile) 55%, var(--line));
 }
 
 /* Résultat de recherche : dossier où se trouve le fichier */

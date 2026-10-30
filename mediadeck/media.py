@@ -308,8 +308,8 @@ class MediaLibrary:
         if not directory.is_dir():
             raise MediaError("not a folder")
         base = self._base(root_id)
-        folders: list[tuple[str, str, int]] = []
-        files: list[tuple[str, str, int]] = []
+        folders: list[tuple[str, str, tuple[int, int]]] = []
+        files: list[tuple[str, str, tuple[int, int]]] = []
         scanned = 0
         try:
             with os.scandir(directory) as iterator:
@@ -319,9 +319,9 @@ class MediaLibrary:
                         break
                     kind = self._classify(base, entry)
                     if kind == "dir":
-                        folders.append((entry.name, kind, 0))
+                        folders.append((entry.name, kind, (0, 0)))
                     elif kind is not None:
-                        files.append((entry.name, kind, self._version(entry) if kind == "image" else 0))
+                        files.append((entry.name, kind, self._stat(entry)))
         except OSError as exc:
             raise MediaError(f"cannot read the folder: {exc.strerror}") from exc
         ordered = [
@@ -332,21 +332,26 @@ class MediaLibrary:
             "root": root_id,
             "path": "/".join(parts),
             "parent": "/".join(parts[:-1]) if parts else None,
-            "entries": [self._entry(name, kind, version) for name, kind, version in ordered[:MAX_ENTRIES]],
+            "entries": [self._entry(name, kind, info) for name, kind, info in ordered[:MAX_ENTRIES]],
             "truncated": len(ordered) > MAX_ENTRIES or scanned > MAX_SCANNED,
         }
 
     @staticmethod
-    def _version(entry: os.DirEntry[str]) -> int:
-        """Date du fichier : change l'adresse de la miniature quand l'image est modifiée."""
+    def _stat(entry: os.DirEntry[str]) -> tuple[int, int]:
+        """Date (secondes) et taille d'un fichier : la date change l'adresse de la miniature quand le fichier est
+        modifié, et les deux servent au tri côté client."""
         try:
-            return int(entry.stat().st_mtime)
+            info = entry.stat()
         except OSError:
-            return 0
+            return 0, 0
+        return int(info.st_mtime), info.st_size
 
     @staticmethod
-    def _entry(name: str, kind: str, version: int) -> dict[str, Any]:
-        return {"name": name, "kind": kind, "v": version} if kind == "image" else {"name": name, "kind": kind}
+    def _entry(name: str, kind: str, info: tuple[int, int] = (0, 0)) -> dict[str, Any]:
+        if kind == "dir":
+            return {"name": name, "kind": kind}
+        version, size = info
+        return {"name": name, "kind": kind, "v": version, "size": size}
 
     def _classify(self, base: Path, entry: os.DirEntry[str]) -> str | None:
         """« dir », un type de média, ou None si l'entrée ne doit pas être proposée. Les liens sont suivis (en mode
@@ -453,7 +458,7 @@ class MediaLibrary:
                                 stack.append(((*logical, entry.name), Path(entry.path)))
                             folded = _fold(entry.name)
                             if all(word in folded for word in words):
-                                found = self._entry(entry.name, kind, self._version(entry) if kind == "image" else 0)
+                                found = self._entry(entry.name, kind, self._stat(entry))
                                 results.append({**found, "root": rid, "folder": "/".join(logical)})
                 except OSError:
                     continue  # dossier illisible : on passe au suivant

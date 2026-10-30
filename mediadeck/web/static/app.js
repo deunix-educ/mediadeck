@@ -3,6 +3,7 @@
 import { $, I18n, Storage, STORAGE_TOKEN } from "./common.js";
 
 const STORAGE_TAB = "mediadeck.tab";
+const STORAGE_MEDIA_SORT = "mediadeck.media_sort";
 
 // ----------------------------------------------------------------------
 // Traductions fr/en
@@ -40,6 +41,10 @@ const MESSAGES = {
         "media.refresh": "Actualiser",
         "media.path": "Chemin",
         "media.filter": "Type de fichier",
+        "media.sort": "Trier par",
+        "media.sort_name": "Nom",
+        "media.sort_date": "Date (récents d'abord)",
+        "media.sort_size": "Taille (gros d'abord)",
         "media.home": "Dossiers",
         "media.all": "Tout",
         "media.audio": "Sons",
@@ -125,6 +130,10 @@ const MESSAGES = {
         "media.refresh": "Refresh",
         "media.path": "Path",
         "media.filter": "File type",
+        "media.sort": "Sort by",
+        "media.sort_name": "Name",
+        "media.sort_date": "Date (newest first)",
+        "media.sort_size": "Size (largest first)",
         "media.home": "Folders",
         "media.all": "All",
         "media.audio": "Sounds",
@@ -1035,6 +1044,7 @@ class MediaPanel {
     // Type d'entrée -> icône du sprite ; « dir » = sous-dossier
     static ICONS = { dir: "folder", audio: "music", image: "image", video: "film" };
     static FILTERS = ["all", "audio", "image", "video"];
+    static SORTS = ["name", "date", "size"];
     static SEARCH_DELAY_MS = 300;
     static MIN_QUERY = 2;
     static THUMB_SIZE = 160;
@@ -1055,6 +1065,8 @@ class MediaPanel {
         this.results = null;
         this.status = "";
         this.filter = "all";
+        const savedSort = Storage.get(STORAGE_MEDIA_SORT);
+        this.sort = MediaPanel.SORTS.includes(savedSort) ? savedSort : "name";
         this.loaded = false;
         this.loadId = 0;
         this.searchId = 0;
@@ -1065,6 +1077,7 @@ class MediaPanel {
             up: $("media-up"),
             crumbs: $("media-crumbs"),
             filters: $("media-filters"),
+            sort: $("media-sort"),
             search: $("media-search"),
             grid: $("media-grid"),
             status: $("media-status"),
@@ -1072,6 +1085,11 @@ class MediaPanel {
         this.els.up.addEventListener("click", () => this.up());
         $("media-refresh").addEventListener("click", () => (this.searching ? this.search() : this.load()));
         this.els.search.addEventListener("input", () => this.onSearchInput());
+        this.els.sort.addEventListener("change", () => {
+            this.sort = this.els.sort.value;
+            Storage.set(STORAGE_MEDIA_SORT, this.sort);
+            this.renderGrid();
+        });
         tabs.onSelect((name) => {
             if (name === "media") {
                 this.show();
@@ -1289,6 +1307,11 @@ class MediaPanel {
         this.els.crumbs.scrollLeft = this.els.crumbs.scrollWidth;
 
         this.els.filters.hidden = this.root === null && !inside;
+        this.els.sort.hidden = this.els.filters.hidden;
+        this.els.sort.replaceChildren(
+            ...MediaPanel.SORTS.map((name) => new Option(this.i18n.t(`media.sort_${name}`), name)),
+        );
+        this.els.sort.value = this.sort;
         this.els.filters.replaceChildren(
             ...MediaPanel.FILTERS.map((name) => {
                 const chip = document.createElement("button");
@@ -1315,7 +1338,7 @@ class MediaPanel {
             holder.innerHTML = `<svg><use href="#i-${MediaPanel.ICONS[entry.kind]}"/></svg>`;
             return holder.firstElementChild;
         };
-        if (entry.kind === "image" && this.thumbnails && root !== null) {
+        if (entry.kind !== "dir" && this.thumbnails && root !== null) {
             const path = folder === "" ? entry.name : `${folder}/${entry.name}`;
             const src = `/thumb?${new URLSearchParams({ root, path, size: MediaPanel.THUMB_SIZE, v: entry.v ?? 0 })}`;
             const image = document.createElement("img");
@@ -1348,9 +1371,16 @@ class MediaPanel {
 
     visibleEntries() {
         const source = this.searching ? this.results?.entries : this.listing?.entries;
-        return (source ?? []).filter(
+        const entries = (source ?? []).filter(
             (entry) => entry.kind === "dir" || this.filter === "all" || entry.kind === this.filter,
         );
+        if (this.sort === "name") {
+            return entries; // ordre du serveur : dossiers puis fichiers, tri naturel
+        }
+        // Dossiers d'abord, dans l'ordre du serveur ; fichiers du plus récent / du plus gros (tri stable : à égalité, par nom)
+        const key = this.sort === "date" ? (entry) => entry.v ?? 0 : (entry) => entry.size ?? 0;
+        const files = entries.filter((entry) => entry.kind !== "dir").sort((a, b) => key(b) - key(a));
+        return [...entries.filter((entry) => entry.kind === "dir"), ...files];
     }
 
     renderGrid() {
