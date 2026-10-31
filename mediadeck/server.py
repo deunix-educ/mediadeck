@@ -235,6 +235,9 @@ class MediaDeckServer:
                     log.debug("websocket error: %s", ws.exception())
         finally:
             self._clients.discard(ws)
+            if self.input.release_owned_by(ws):
+                log.info("released the mouse button(s) held by %s", request.remote)
+                self.notify()
             log.info("client disconnected: %s", request.remote)
         return ws
 
@@ -243,12 +246,12 @@ class MediaDeckServer:
             message = json.loads(raw)
             if not isinstance(message, dict):
                 raise ValueError("message must be an object")
-            await self._dispatch(message)
+            await self._dispatch(message, ws)
         except Exception as exc:  # noqa: BLE001 - toute erreur est renvoyée au client
             log.debug("command failed: %s", exc)
             await ws.send_json({"type": "error", "message": str(exc)})
 
-    async def _dispatch(self, message: dict[str, Any]) -> None:
+    async def _dispatch(self, message: dict[str, Any], owner: object | None = None) -> None:
         domain = message.get("domain")
         action = message.get("action")
         if not isinstance(action, str):
@@ -267,7 +270,9 @@ class MediaDeckServer:
                 if action == "text":
                     await self.text.type(message.get("text"))
                 else:
-                    self.input.execute(action, message)
+                    self.input.execute(action, message, owner)
+                    if action == "button":
+                        self.notify()  # tous les clients voient les boutons maintenus
             case "system":
                 if self.system is None:
                     raise RuntimeError("system control unavailable")

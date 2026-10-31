@@ -935,8 +935,9 @@ input[type="range"]:disabled {
 .dpad {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(3, minmax(0, 1fr)); /* rangées égales : le contenu des coins ne doit pas agrandir celle du haut */
     grid-template-areas:
-        ". up ."
+        "lmb up rmb"
         "left ok right"
         ". down .";
     gap: 6px;
@@ -978,6 +979,34 @@ input[type="range"]:disabled {
 
 .dpad-btn.right {
     grid-area: right;
+}
+
+.dpad-btn.lmb {
+    grid-area: lmb;
+}
+
+.dpad-btn.rmb {
+    grid-area: rmb;
+}
+
+/* Boutons de souris maintenus : contour pour les distinguer des flèches, plein quand le bouton est enfoncé */
+.dpad-btn.hold {
+    align-content: center;
+    gap: 2px;
+    border: 1px solid var(--line);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.dpad-btn.hold svg {
+    width: 28px;
+    height: 28px;
+}
+
+.dpad-btn.hold[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-ink);
 }
 
 .dpad-btn.ok {

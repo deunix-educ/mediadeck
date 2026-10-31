@@ -12,7 +12,7 @@ The PC runs a small Python bridge; the tablet only needs a browser.
 | **Playing** | Cover art (or, failing that, an image of the file played), title (or file name), progress, play/pause, next/previous, shuffle, repeat, player volume, player selection | MPRIS (session D-Bus): Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
 | | **Volume bar** under the player: master volume, mute; the active output's button opens a window with the output selection (HDMI, Bluetooth…) and per-output volume; the bar is always visible | `pactl` (PipeWire or PulseAudio) |
 | **Media** | Sound, image and video files from the PC's folders, as icons or thumbnails, with search and sorting (name, date, size); a tap opens the file **on the PC** with the player chosen for its type | `gio`; folders and players: see "Media" |
-| **Touchpad** | Touchpad (click, right click, 2-finger scroll), D-pad, Esc, Space, F, F11…, text entry with the tablet's keyboard | `/dev/uinput`: works on X11 **and** Wayland |
+| **Touchpad** | Touchpad (click, right click, 2-finger scroll), D-pad with two **held** "Left click" / "Right click" toggle buttons (drag and drop, text selection), Esc, Space, F, F11…, text entry with the tablet's keyboard | `/dev/uinput`: works on X11 **and** Wayland |
 | **Launchers** | Configurable buttons: websites and installed applications (`/admin` page) | browser, `gio launch` |
 | **System** | Lock, sleep, restart, shut down (1 s long press): sensitive operations, kept apart from launchers | logind, `org.freedesktop.ScreenSaver` |
 
@@ -191,6 +191,19 @@ PC**; the tablet stays a remote control. A **long press** (or a right click) off
   (`<name>.jpg`, `<name>-poster.jpg`, `poster.jpg`, `cover.jpg`, `folder.jpg`…), else the cover embedded in a sound file
   or a frame taken from the video. Without an MPRIS player (image viewer, silent player), the tab shows the **last file
   opened** from the Media tab, with its title and image.
+
+## Held mouse buttons (drag and drop)
+
+In the Touchpad tab, the two free corners of the D-pad hold **Left click** and **Right click**: one tap **presses**
+the PC's mouse button, a second tap **releases** it (the button turns orange while it is down). In between, the
+touchpad moves the pointer: that is a drag and drop, a text selection or a window move. The two buttons are independent.
+
+- While held, tapping the touchpad for the same button is ignored (it does not drop the drag); the other button stays
+  usable (right click while the left one is held).
+- **Release is guaranteed**: a held button is released when you leave the Touchpad tab, when the page is hidden
+  (screen off, another app) and by the server when the client's connection drops or the service stops. A button
+  can never stay stuck on the PC.
+- Several tablets see the same state; one tablet disconnecting only releases its own buttons.
 
 ## Text entry
 

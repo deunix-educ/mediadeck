@@ -12,7 +12,7 @@ Le PC exécute un petit pont Python ; la tablette n'a besoin que d'un navigateur
 | **Lecture** | Pochette (ou, à défaut, image du fichier joué), titre (ou nom du fichier), progression, lecture/pause, suivant/précédent, aléatoire, répétition, volume du lecteur, choix du lecteur | MPRIS (D-Bus de session) : Elisa, VLC, mpv, Firefox, Chromium, Spotify, Kodi… |
 | | **Barre de volume** sous le lecteur : volume principal, sourdine ; le bouton de la sortie active ouvre une fenêtre avec le choix de la sortie (HDMI, Bluetooth…) et le volume par sortie ; la barre reste toujours visible | `pactl` (PipeWire ou PulseAudio) |
 | **Médias** | Fichiers son, image et vidéo des dossiers du PC, en icônes ou miniatures, avec recherche et tri (nom, date, taille) ; un appui ouvre le fichier **sur le PC** avec le lecteur choisi pour son type | `gio` ; dossiers et lecteurs : voir « Médias » |
-| **Pavé** | Pavé tactile (clic, clic droit, défilement 2 doigts), croix directionnelle, Échap, Espace, F, F11…, saisie de texte avec le clavier de la tablette | `/dev/uinput` : fonctionne sous X11 **et** Wayland |
+| **Pavé** | Pavé tactile (clic, clic droit, défilement 2 doigts), croix directionnelle avec deux boutons « Clic G » / « Clic D » **maintenus** (bascule, pour glisser-déposer et sélectionner), Échap, Espace, F, F11…, saisie de texte avec le clavier de la tablette | `/dev/uinput` : fonctionne sous X11 **et** Wayland |
 | **Lanceurs** | Boutons configurables : sites web et applications installées (page `/admin`) | navigateur, `gio launch` |
 | **Système** | Verrouillage, veille, redémarrage, extinction (appui long 1 s) : opérations délicates, séparées des lanceurs | logind, `org.freedesktop.ScreenSaver` |
 
@@ -195,6 +195,20 @@ Un appui sur un fichier l'**ouvre sur le PC** ; la tablette reste une télécomm
   (`<nom>.jpg`, `<nom>-poster.jpg`, `poster.jpg`, `cover.jpg`, `folder.jpg`…), sinon la pochette intégrée d'un fichier
   son ou une image prise dans la vidéo. Sans lecteur MPRIS (visionneuse d'images, lecteur muet), l'onglet montre le
   **dernier fichier ouvert** depuis l'onglet Médias, avec son titre et son image.
+
+## Boutons de souris maintenus (glisser-déposer)
+
+Dans l'onglet Pavé, les deux coins libres de la croix directionnelle portent **Clic G** et **Clic D** : un appui
+**enfonce** le bouton de la souris du PC, un second appui le **relâche** (le bouton devient orange tant qu'il est
+enfoncé). Entre les deux, le pavé tactile déplace le pointeur : c'est un glisser-déposer, une sélection de texte ou le
+déplacement d'une fenêtre. Les deux boutons sont indépendants.
+
+- Pendant le maintien, un tapotement du pavé sur le même bouton est ignoré (il ne lâche pas le glissement) ; l'autre
+  bouton reste utilisable (clic droit pendant que le gauche est maintenu).
+- **Relâchement garanti** : un bouton maintenu est relâché quand on quitte l'onglet Pavé, quand la page est masquée
+  (écran éteint, autre application) et par le serveur quand la connexion du client tombe ou que le service s'arrête.
+  Un bouton ne reste donc jamais coincé sur le PC.
+- Plusieurs tablettes voient le même état ; la déconnexion d'une tablette ne relâche que ses propres boutons.
 
 ## Saisie de texte
 

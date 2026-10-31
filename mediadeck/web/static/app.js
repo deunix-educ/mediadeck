@@ -70,7 +70,11 @@ const MESSAGES = {
         "media.error": "Dossier illisible : {message}",
         "media.denied": "Jeton refusé : rouvrez la télécommande avec son URL complète.",
         "remote.none": "Clavier et souris virtuels indisponibles",
-        "remote.hint": "Glisser : déplacer · Toucher : clic · 2 doigts : défiler / clic droit",
+        "remote.hint": "Glisser : déplacer · Toucher : clic · 2 doigts : défiler / clic droit · Clic G / D maintenu : glisser-déposer",
+        "hold.left": "Bouton gauche de la souris maintenu : appuyer pour l'enfoncer, appuyer de nouveau pour le relâcher",
+        "hold.left_short": "Clic G",
+        "hold.right": "Bouton droit de la souris maintenu : appuyer pour l'enfoncer, appuyer de nouveau pour le relâcher",
+        "hold.right_short": "Clic D",
         "text.open": "Clavier",
         "text.title": "Saisie de texte",
         "text.placeholder": "Texte à saisir sur le PC",
@@ -165,7 +169,11 @@ const MESSAGES = {
         "media.error": "Cannot read the folder: {message}",
         "media.denied": "Token rejected: reopen the remote with its full URL.",
         "remote.none": "Virtual keyboard and mouse unavailable",
-        "remote.hint": "Drag: move · Tap: click · 2 fingers: scroll / right click",
+        "remote.hint": "Drag: move · Tap: click · 2 fingers: scroll / right click · Left / Right click held: drag and drop",
+        "hold.left": "Hold the left mouse button: tap to press it, tap again to release it",
+        "hold.left_short": "Left click",
+        "hold.right": "Hold the right mouse button: tap to press it, tap again to release it",
+        "hold.right_short": "Right click",
         "text.open": "Keyboard",
         "text.title": "Text entry",
         "text.placeholder": "Text to type on the PC",
@@ -858,13 +866,74 @@ class Touchpad {
 }
 
 class RemotePanel {
-    constructor(connection) {
+    static LOCAL_MS = 500;
+
+    constructor(connection, tabs) {
         this.connection = connection;
         this.touchpad = new Touchpad($("touchpad"), connection);
+        this.held = new Set(); // boutons de souris maintenus (affichés)
+        this.serverHeld = new Set(); // dernier état annoncé par le serveur
+        this.localUntil = 0; // jusqu'à cet instant, un appui local prime sur les états reçus
+        this.syncTimer = null;
         document.querySelectorAll("#panel-remote [data-key]").forEach((button) => {
             button.addEventListener("click", () => {
                 connection.send({ domain: "input", action: "key", key: button.dataset.key });
             });
+        });
+        // Bascule : un appui enfonce le bouton sur le PC, le suivant le relâche (glisser-déposer au pavé entre les deux)
+        document.querySelectorAll("#panel-remote [data-hold]").forEach((button) => {
+            button.addEventListener("click", () => {
+                const name = button.dataset.hold;
+                const pressed = !this.held.has(name);
+                connection.send({ domain: "input", action: "button", button: name, pressed });
+                // Retour immédiat ; l'état renvoyé par le serveur fait foi ensuite (voir syncHeld)
+                this.held = new Set(pressed ? [...this.held, name] : [...this.held].filter((held) => held !== name));
+                this.localUntil = performance.now() + RemotePanel.LOCAL_MS;
+                this.renderHeld();
+            });
+        });
+        // Un bouton resté enfoncé sur le PC est un piège : relâché dès qu'on quitte la télécommande ou que la page se cache
+        // (le serveur le fait aussi quand la connexion tombe)
+        tabs.onSelect((name) => {
+            if (name !== "remote") {
+                this.releaseAll();
+            }
+        });
+        document.addEventListener("visibilitychange", () => {
+            if (document.hidden) {
+                this.releaseAll();
+            }
+        });
+        window.addEventListener("pagehide", () => this.releaseAll());
+    }
+
+    // Relâche tout ce qui est affiché ou que le serveur croit enfoncé
+    releaseAll() {
+        for (const name of new Set([...this.held, ...this.serverHeld])) {
+            this.connection.send({ domain: "input", action: "button", button: name, pressed: false });
+        }
+        this.held = new Set();
+        this.serverHeld = new Set();
+        this.localUntil = performance.now() + RemotePanel.LOCAL_MS;
+        this.renderHeld();
+    }
+
+    // Un état déjà en route peut précéder notre dernier appui et le « défaire » un instant : pendant une courte fenêtre
+    // après un appui, l'état reçu est gardé de côté puis appliqué
+    syncHeld() {
+        const wait = this.localUntil - performance.now();
+        if (wait > 0) {
+            clearTimeout(this.syncTimer);
+            this.syncTimer = setTimeout(() => this.syncHeld(), wait);
+            return;
+        }
+        this.held = new Set(this.serverHeld);
+        this.renderHeld();
+    }
+
+    renderHeld() {
+        document.querySelectorAll("#panel-remote [data-hold]").forEach((button) => {
+            button.setAttribute("aria-pressed", String(this.held.has(button.dataset.hold)));
         });
     }
 
@@ -872,6 +941,8 @@ class RemotePanel {
         $("remote-empty").hidden = input.available;
         $("remote-view").hidden = !input.available;
         $("remote-reason").textContent = input.reason || "";
+        this.serverHeld = new Set(input.buttons ?? []);
+        this.syncHeld();
     }
 }
 
@@ -1676,7 +1747,7 @@ class App {
         this.connection = new Connection(token);
         this.player = new PlayerPanel(this.connection, this.i18n);
         this.audio = new AudioPanel(this.connection, this.i18n);
-        this.remote = new RemotePanel(this.connection);
+        this.remote = new RemotePanel(this.connection, this.tabs);
         this.text = new TextPanel(this.connection, this.i18n, this.toast);
         this.launchers = new LauncherPanel(this.connection, this.i18n, this.toast);
         this.media = new MediaPanel(this.connection, this.i18n, this.toast, this.tabs);

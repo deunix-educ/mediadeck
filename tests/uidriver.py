@@ -49,6 +49,10 @@ async def _websocket(request: web.Request) -> web.WebSocketResponse:
     async for message in socket_:
         if message.type == WSMsgType.ERROR:
             break
+        # Un test peut enregistrer les messages du client et répondre (voir make_app)
+        handler = request.app.get("on_message")
+        if message.type == WSMsgType.TEXT and handler is not None:
+            await handler(json.loads(message.data), socket_)
     return socket_
 
 
@@ -56,9 +60,13 @@ async def _index(_request: web.Request) -> web.Response:
     return render_page("index.html")
 
 
-def make_app() -> web.Application:
-    """La vraie page et les vrais fichiers statiques (mêmes fonctions que le serveur), avec un état de démonstration."""
+def make_app(on_message: Any = None) -> web.Application:
+    """La vraie page et les vrais fichiers statiques (mêmes fonctions que le serveur), avec un état de démonstration.
+
+    ``on_message(message, socket)`` : appelé pour chaque message reçu du client (coroutine)."""
     app = web.Application()
+    if on_message is not None:
+        app["on_message"] = on_message
     app.router.add_get("/", _index)
     app.router.add_get("/ws", _websocket)
     app.router.add_get("/static/{version}/{path:.+}", versioned_static)

@@ -58,6 +58,8 @@ class VirtualInput:
     def __init__(self, enabled: bool) -> None:
         self._keyboard: Any = None
         self._pointer: Any = None
+        # Boutons de souris maintenus (bascule de l'interface) -> connexion qui les a enfoncés
+        self._held: dict[str, object | None] = {}
         self.reason = ""
         if not enabled:
             self.reason = "disabled in config"
@@ -86,6 +88,7 @@ class VirtualInput:
         return self._keyboard is not None and self._pointer is not None
 
     def close(self) -> None:
+        self.release_all()  # jamais de bouton resté enfoncé après l'arrêt du serveur
         for device in (self._keyboard, self._pointer):
             if device is not None:
                 device.close()
@@ -93,7 +96,31 @@ class VirtualInput:
         self._pointer = None
 
     def snapshot(self) -> dict[str, Any]:
-        return {"available": self.available, "reason": self.reason, "keys": sorted(KEY_NAMES)}
+        return {"available": self.available, "reason": self.reason, "keys": sorted(KEY_NAMES), "buttons": sorted(self._held)}
+
+    def release_all(self) -> None:
+        self._release(list(self._held))
+
+    def release_owned_by(self, owner: object) -> bool:
+        """Relâche les boutons enfoncés par une connexion qui disparaît ; True si quelque chose a été relâché."""
+        mine = [button for button, holder in self._held.items() if holder is owner]
+        self._release(mine)
+        return bool(mine)
+
+    def _release(self, buttons: list[str]) -> None:
+        for button in buttons:
+            self._held.pop(button, None)
+            if self._pointer is None or ecodes is None:
+                continue
+            try:
+                self._pointer.write(ecodes.EV_KEY, getattr(ecodes, BUTTONS[button]), 0)
+            except OSError as exc:  # l'état est déjà oublié : on relâche les suivants quand même
+                log.warning("cannot release the %s button: %s", button, exc)
+        if buttons and self._pointer is not None:
+            try:
+                self._pointer.syn()
+            except OSError as exc:
+                log.warning("cannot synchronise the pointer: %s", exc)
 
     def write_keys(self, events: list[tuple[int, bool]]) -> None:
         """Écrit des événements (code evdev, appuyée) puis synchronise ; réservé à la saisie de texte."""
@@ -105,7 +132,8 @@ class VirtualInput:
             self._keyboard.write(ecodes.EV_KEY, code, 1 if pressed else 0)
         self._keyboard.syn()
 
-    def execute(self, action: str, payload: dict[str, Any]) -> None:
+    def execute(self, action: str, payload: dict[str, Any], owner: object | None = None) -> None:
+        """Exécute une action du client. ``owner`` : la connexion, pour relâcher ses boutons si elle disparaît."""
         if not self.available or ecodes is None:
             raise RuntimeError(f"virtual input unavailable: {self.reason}")
         match action:
@@ -133,10 +161,28 @@ class VirtualInput:
                 if dx:
                     self._pointer.write(ecodes.EV_REL, ecodes.REL_HWHEEL, dx)
                 self._pointer.syn()
+            case "button":
+                # Bouton maintenu (bascule) : glisser-déposer, sélection ; relâché à la demande ou à la déconnexion
+                button = payload.get("button")
+                pressed = payload.get("pressed")
+                if not isinstance(button, str) or button not in BUTTONS:
+                    raise ValueError("unknown button")
+                if not isinstance(pressed, bool):
+                    raise ValueError("pressed must be a boolean")
+                if pressed == (button in self._held):
+                    return  # déjà dans cet état
+                self._pointer.write(ecodes.EV_KEY, getattr(ecodes, BUTTONS[button]), 1 if pressed else 0)
+                self._pointer.syn()
+                if pressed:
+                    self._held[button] = owner
+                else:
+                    del self._held[button]
             case "click":
                 button = payload.get("button", "left")
                 if button not in BUTTONS:
                     raise ValueError("unknown button")
+                if button in self._held:
+                    return  # un tapotement pendant un glissement ne doit pas lâcher le bouton
                 code = getattr(ecodes, BUTTONS[button])
                 self._pointer.write(ecodes.EV_KEY, code, 1)
                 self._pointer.syn()

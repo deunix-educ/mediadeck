@@ -39,6 +39,8 @@
         <symbol id="i-left" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
         <symbol id="i-right" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
         <symbol id="i-back" viewBox="0 0 24 24"><path d="M9 7L4 12l5 5M4.5 12H15a5 5 0 0 1 0 10h-2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+        <symbol id="i-mouse-left" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 10.5h12M12 2.5v8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v8H6V8.5a6 6 0 0 1 6-6z" fill="currentColor"/></symbol>
+        <symbol id="i-mouse-right" viewBox="0 0 24 24"><rect x="6" y="2.5" width="12" height="19" rx="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 10.5h12M12 2.5v8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 2.5v8h6V8.5a6 6 0 0 0-6-6z" fill="currentColor"/></symbol>
         <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6.5 10h.01M10 10h.01M14 10h.01M17.5 10h.01M7.5 14h9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
         <symbol id="i-expand" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
         <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
@@ -176,6 +178,9 @@
                     </div>
                     <div class="remote-side">
                         <div class="dpad">
+                            <!-- Boutons de souris maintenus (bascule) : glisser-déposer, sélection -->
+                            <button class="dpad-btn hold lmb" type="button" data-hold="left" aria-pressed="false" data-i18n-label="hold.left"><svg><use href="#i-mouse-left"/></svg><span data-i18n="hold.left_short"></span></button>
+                            <button class="dpad-btn hold rmb" type="button" data-hold="right" aria-pressed="false" data-i18n-label="hold.right"><svg><use href="#i-mouse-right"/></svg><span data-i18n="hold.right_short"></span></button>
                             <button class="dpad-btn up" type="button" data-key="up" data-i18n-label="key.up"><svg><use href="#i-up"/></svg></button>
                             <button class="dpad-btn left" type="button" data-key="left" data-i18n-label="key.left"><svg><use href="#i-left"/></svg></button>
                             <button class="dpad-btn ok" type="button" data-key="enter">OK</button>
