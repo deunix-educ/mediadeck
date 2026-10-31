@@ -49,6 +49,7 @@ contacts*.vcf
 *.swp
 *~
 .DS_Store
+.directory
 
 # Service généré par make service-install
 systemd/*.service
